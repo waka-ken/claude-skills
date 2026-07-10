@@ -1,0 +1,7 @@
+.env
+node_modules/
+
+# Claude Code ローカル設定（シークレット含む）
+.claude/settings.json
+.claude/settings.local.json
+.claude/import-tasks-state.json

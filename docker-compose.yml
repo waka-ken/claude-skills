@@ -1,0 +1,20 @@
+services:
+  claude-dev:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    image: claude-skills-dev:latest
+    container_name: claude-skills-dev
+    volumes:
+      - .:/workspace
+      - claude-config:/home/node/.claude
+    environment:
+      CLAUDE_CONFIG_DIR: /home/node/.claude
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    user: node
+
+volumes:
+  claude-config:

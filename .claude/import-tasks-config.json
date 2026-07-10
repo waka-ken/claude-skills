@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "name": "プロジェクト名（例）",
+      "page_id": "プロジェクト親ページのID（ここを実際のIDに書き換える）",
+      "task_db_id": "そのプロジェクトのタスクDBのID（ここを実際のIDに書き換える）"
+    }
+  ],
+  "state_file": "/workspace/.claude/import-tasks-state.json"
+}

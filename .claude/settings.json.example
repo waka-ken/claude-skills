@@ -1,0 +1,7 @@
+{
+  "env": {
+    "NOTION_TOKEN": "your-notion-integration-token",
+    "NOTION_DATABASE_ID": "your-notion-database-id",
+    "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+  }
+}
