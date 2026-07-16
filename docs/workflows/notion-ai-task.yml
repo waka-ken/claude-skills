@@ -1,0 +1,220 @@
+# 対象リポジトリへコピーするワークフロー
+# 配置先: .github/workflows/notion-ai-task.yml
+#
+# 必要 Secrets:
+#   ANTHROPIC_API_KEY  - Claude / Claude Code Action
+#   NOTION_TOKEN       - Notion 書き戻し用インテグレーション
+#
+# トリガー: GAS からの repository_dispatch (event_type: notion-ai-task)
+
+name: Notion AI Task Pipeline
+
+on:
+  repository_dispatch:
+    types: [notion-ai-task]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+env:
+  NOTION_PAGE_ID: ${{ github.event.client_payload.notion_page_id }}
+  TASK_TITLE: ${{ github.event.client_payload.title }}
+  TASK_BACKGROUND: ${{ github.event.client_payload.background }}
+  TASK_TODO: ${{ github.event.client_payload.todo }}
+  TASK_DONE: ${{ github.event.client_payload.done_criteria }}
+  TASK_BODY: ${{ github.event.client_payload.body_markdown }}
+  DISPATCH_ID: ${{ github.event.client_payload.dispatch_id }}
+
+jobs:
+  design:
+    name: Phase1 Design (.ai_todo.md)
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.meta.outputs.branch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Branch name
+        id: meta
+        run: |
+          SHORT="${DISPATCH_ID:-manual}"
+          SHORT="${SHORT:0:8}"
+          echo "branch=ai/notion-${SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Create working branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${{ steps.meta.outputs.branch }}"
+
+      - name: Generate .ai_todo.md via Claude API
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          TREE=$(find . -type f \
+            -not -path './.git/*' \
+            -not -path './node_modules/*' \
+            -not -path './.ai_todo.md' \
+            | head -n 200 | sed 's|^./||')
+
+          PROMPT=$(cat <<EOF
+          あなたはシニアエンジニアです。以下の Notion タスクを、このリポジトリ向けの具体的な実装手順書に翻訳してください。
+          出力は Markdown のみ。ファイルは後段の Claude Code がそのまま実行します。
+
+          # タスクタイトル
+          ${TASK_TITLE}
+
+          # 背景
+          ${TASK_BACKGROUND}
+
+          # やること
+          ${TASK_TODO}
+
+          # 完了条件
+          ${TASK_DONE}
+
+          # 本文（参考）
+          ${TASK_BODY}
+
+          # リポジトリファイル一覧（一部）
+          ${TREE}
+
+          # 出力フォーマット（厳守）
+          # .ai_todo.md
+          ## ゴール
+          ## 変更対象ファイル
+          ## 手順（チェックリスト）
+          ## テスト
+          ## 完了条件
+          EOF
+          )
+
+          PAYLOAD=$(jq -n \
+            --arg model "claude-sonnet-4-20250514" \
+            --arg prompt "$PROMPT" \
+            '{
+              model: $model,
+              max_tokens: 4096,
+              messages: [{ role: "user", content: $prompt }]
+            }')
+
+          RESP=$(curl -sS https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "$PAYLOAD")
+
+          echo "$RESP" | jq -r '.content[] | select(.type=="text") | .text' > .ai_todo.md
+          if [ ! -s .ai_todo.md ]; then
+            echo "Failed to generate .ai_todo.md" >&2
+            echo "$RESP" >&2
+            exit 1
+          fi
+          echo "----- .ai_todo.md -----"
+          head -n 40 .ai_todo.md
+
+      - name: Commit design doc
+        run: |
+          git add .ai_todo.md
+          git commit -m "docs(ai): add .ai_todo.md for Notion task ${DISPATCH_ID}"
+          git push -u origin HEAD
+
+      - name: Notion → AI実装中
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        run: |
+          if [ -z "${NOTION_TOKEN:-}" ] || [ -z "${NOTION_PAGE_ID:-}" ]; then
+            echo "Skip Notion update (missing secrets/page_id)"
+            exit 0
+          fi
+          curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Notion-Version: 2022-06-28" \
+            -H "Content-Type: application/json" \
+            -d '{"properties":{"AIステータス":{"select":{"name":"AI実装中"}}}}'
+
+  implement:
+    name: Phase2 Implement + PR
+    needs: design
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout design branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.design.outputs.branch }}
+
+      - name: Claude Code implement from .ai_todo.md
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          base_branch: main
+          branch_prefix: "ai/notion-"
+          prompt: |
+            REPO: ${{ github.repository }}
+            NOTION_PAGE_ID: ${{ env.NOTION_PAGE_ID }}
+            DISPATCH_ID: ${{ env.DISPATCH_ID }}
+
+            リポジトリ直下の `.ai_todo.md` を唯一の手順書として扱い、記載どおりに実装してください。
+            - `.ai_todo.md` の順番を守り、範囲外の変更はしない
+            - テストがあれば実行し、失敗したら修正して再実行
+            - 完了後、変更をコミットし Draft PR を作成する
+            - PR タイトルは Notion タスク「${{ env.TASK_TITLE }}」を含める
+            - PR 本文に Notion page id `${{ env.NOTION_PAGE_ID }}` と `.ai_todo.md` への言及を入れる
+          claude_args: |
+            --max-turns 40
+
+      - name: Find PR URL
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="${{ needs.design.outputs.branch }}"
+          URL=$(gh pr list --head "$BRANCH" --json url --jq '.[0].url' || true)
+          if [ -z "$URL" ]; then
+            URL=$(gh pr list --state open --limit 5 --json url,headRefName \
+              --jq ".[] | select(.headRefName|startswith(\"ai/notion\")) | .url" | head -n1 || true)
+          fi
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          echo "PR_URL=${URL}"
+
+      - name: Notion → PR作成済
+        if: success() && steps.pr.outputs.url != ''
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Notion-Version: 2022-06-28" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n --arg url "$PR_URL" '{
+              properties: {
+                "AIステータス": { select: { name: "PR作成済" } },
+                "PR URL": { url: $url },
+                "AI最終エラー": { rich_text: [] }
+              }
+            }')"
+
+      - name: Notion → AI失敗
+        if: failure()
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        run: |
+          MSG="GitHub Actions implement failed. run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Notion-Version: 2022-06-28" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n --arg msg "$MSG" '{
+              properties: {
+                "AIステータス": { select: { name: "AI失敗" } },
+                "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
+              }
+            }')"

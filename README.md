@@ -70,4 +70,14 @@ docker compose down
   devcontainer.json   # Cursor/VS Code 用設定
 docker-compose.yml    # スタンドアロン実行用
 scripts/dev-shell.sh  # コンテナ起動ヘルパー
+github_dispatch.gs    # Notion → GitHub Dispatch 中継（GAS）
+docs/notion-claude-pipeline-spec.md  # AIパイプライン仕様
 ```
+
+## Notion × Claude 自動開発パイプライン
+
+仕様とセットアップ手順:
+
+- [仕様](docs/notion-claude-pipeline-spec.md)
+- [Notion Automation](docs/notion-automation-setup.md)
+- [GitHub Actions 導入](docs/github-actions-setup.md)

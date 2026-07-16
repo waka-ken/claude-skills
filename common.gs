@@ -1,6 +1,6 @@
 /**
  * 共通定数・ヘルパー関数
- * notion_task_extractor.gs / morning_tasks.gs から共有
+ * notion_task_extractor.gs / morning_tasks.gs / github_dispatch.gs から共有
  *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  * 【スクリプトプロパティ（全スクリプト共通）】
@@ -14,6 +14,13 @@
  *   SLACK_TOKEN    : Slack Bot Token（xoxb-... で始まるもの）
  *                    取得: https://api.slack.com/apps
  *                    必要スコープ: chat:write, im:write
+ *
+ *   GITHUB_PAT     : GitHub PAT（repo + workflow 権限）
+ *                    AIパイプライン Repository Dispatch 用（github_dispatch.gs）
+ *
+ *   WEBHOOK_SECRET : Notion Automation → GAS doPost の共有シークレット
+ *
+ *   TEST_PAGE_ID   : （任意）testAiDispatch() 用の Notion タスクページ ID
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  */
 
