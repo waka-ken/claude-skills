@@ -15,10 +15,20 @@
 
 | Name | 内容 |
 |------|------|
-| `ANTHROPIC_API_KEY` | Anthropic API キー |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth（`claude setup-token` で生成。Pro/Max 枠を使用） |
 | `NOTION_TOKEN` | Notion Integration（オールタスク管理 / プロジェクトDBへ接続済み） |
 
 `GITHUB_TOKEN` は Actions 既定で足りる（contents / pull-requests）。
+
+## 2.1. リポジトリ設定（マージ後ブランチ削除）
+
+Settings → General → Pull Requests で **Automatically delete head branches** を ON にする。
+
+```bash
+gh api -X PATCH repos/OWNER/REPO -f delete_branch_on_merge=true
+```
+
+AI が作る `ai/notion-*` ブランチが、PR マージ後に残らないようにするため。
 
 ## 3. PAT（GAS 側）との関係
 
@@ -26,6 +36,8 @@ GAS の `GITHUB_PAT` は対象リポへ `repository_dispatch` を送るため、
 
 - `repo`
 - `workflow`（private リポで dispatch する場合に必要になることが多い）
+
+**対象リポを増やすとき:** Fine-grained PAT なら Repository access に新リポ（例: `waka-ken/core-RAG`）を追加する。Classic PAT なら所有者アカウントが当該 private リポへアクセスできること。アクセスが無いと GitHub は `404 Not Found` を返し、Notion は `AI失敗` になる（jackson だけ通って core-RAG だけ落ちる、という症状になりやすい）。
 
 ## 4. 手動 smoke test
 
