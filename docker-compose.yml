@@ -8,6 +8,8 @@ services:
     volumes:
       - .:/workspace
       - claude-config:/home/node/.claude
+      - ${HOME}/.ssh:/home/node/.ssh
+      - ${HOME}/.gitconfig:/home/node/.gitconfig:ro
     environment:
       CLAUDE_CONFIG_DIR: /home/node/.claude
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

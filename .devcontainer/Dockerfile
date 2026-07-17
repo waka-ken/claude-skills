@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     less \
     nano \
+    openssh-client \
     procps \
     sudo \
     unzip \

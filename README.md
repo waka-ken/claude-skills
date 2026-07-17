@@ -7,6 +7,7 @@
 - Docker Desktop または Docker Engine
 - Docker Compose v2
 - Cursor または VS Code（Dev Containers 拡張機能推奨）
+- ホスト側に GitHub 用 SSH 鍵（`~/.ssh`）があること（推奨）
 
 ## セットアップ
 
@@ -37,7 +38,20 @@ claude --version
 claude
 ```
 
+## マウント一覧
+
+| ホスト | コンテナ | 用途 |
+|--------|----------|------|
+| ワークスペース | `/workspace` | リポジトリ本体 |
+| Docker volume `claude-config` | `/home/node/.claude` | Claude Code 認証・設定の永続化 |
+| `${HOME}/.ssh` | `/home/node/.ssh` | GitHub SSH 鍵（rw） |
+| `${HOME}/.gitconfig` | `/home/node/.gitconfig` | git 作者情報（ro） |
+
+Dev Container では `${localEnv:HOME}`、compose では `${HOME}` を参照します（WSL / Linux のホームを想定）。
+
 ## 認証
+
+### Claude Code
 
 | 方法 | 手順 |
 |------|------|
@@ -45,6 +59,34 @@ claude
 | API キー | `.env` に `ANTHROPIC_API_KEY` を設定 |
 
 認証情報は Docker ボリューム `claude-config`（または devcontainer の `claude-code-config-*`）に永続化されます。
+
+### GitHub（git push / gh）
+
+ホストの `~/.ssh` をコンテナにマウントし、SSH で GitHub に接続する想定です。
+
+**前提**
+
+- ホストに `~/.ssh/id_ed25519`（または `id_rsa`）など GitHub 登録済みの鍵がある
+- 秘密鍵の権限は `600`、ディレクトリは `700`（`postCreate` でも軽く整える）
+
+**動作確認（コンテナ内）**
+
+```bash
+ls -la ~/.ssh
+ssh -T git@github.com
+```
+
+成功例: `Hi <user>! You've successfully authenticated...`
+
+**フォールバック（SSH が使えない場合）**
+
+```bash
+gh auth login
+# Git operations は HTTPS を選択
+git -c credential.helper='!gh auth git-credential' push https://github.com/OWNER/REPO.git BRANCH
+```
+
+`gh` のトークン認証は HTTPS 向けです。`origin` が `git@github.com:...` のままだと SSH 鍵が必要になります。
 
 ## よく使うコマンド
 
@@ -61,6 +103,8 @@ docker compose exec claude-dev bash
 # 停止
 docker compose down
 ```
+
+設定変更（マウント追加など）後は **Rebuild Container** または `docker compose up -d --build` が必要です。
 
 ## ディレクトリ構成
 
