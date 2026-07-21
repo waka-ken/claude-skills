@@ -5,6 +5,7 @@
 #   CLAUDE_CODE_OAUTH_TOKEN  - Claude Code (Pro/Max) の OAuth トークン
 #                              生成: `claude setup-token`
 #   NOTION_TOKEN             - Notion 書き戻し用インテグレーション
+#   SLACK_TOKEN              - （任意）完了/失敗の DM 通知。GAS と同じ Bot Token
 #
 # トリガー: GAS からの repository_dispatch (event_type: notion-ai-task)
 #
@@ -86,7 +87,20 @@ jobs:
           - これは対話セッションではない。ユーザー承認・確認・許可待ちは禁止。
           - ツール（Write / Edit / Bash 等）は一切使わないこと。
           - ファイルを作成・編集しようとしないこと。
-          - 返答は標準出力への Markdown 本文のみ。前置き・後書き・コードフェンス不要。
+          - 返答は標準出力への Markdown 本文のみ。前書き・後書き・コードフェンス不要。
+
+          【設計の方針・断念禁止】
+          - 手順は「表面のドキュメント追加だけ」で終わらせないこと。
+          - 実装・調査・リファクタは、対象のソース（handler / service / repository / test）まで踏み込んだ手順にすること。
+          - 各手順に「読むべきファイルパス」と「実行すべきコマンド」を具体的に書くこと。
+          - リポジトリルートに docker-compose.yml / Dockerfile がある前提で、検証は Docker 経由を第一選択にすること。
+            例: docker compose up -d --build / docker compose exec app <cmd>
+          - 「環境が無いのでスキップ」を完了条件にしない。Compose で足りるローカル検証は完了手順に含めること。
+
+          【成果物の上限・デプロイ禁止】
+          - ゴールは Draft PR 作成まで。AWS / CDK / 本番・検証環境へのデプロイは手順に含めない・禁止。
+          - 禁止例: `cdk deploy`, `aws cloudformation deploy`, 本番 API への破壊的操作、インフラ適用。
+          - デプロイが必要な作業は「ブロッカー（人の手でデプロイ）」に書くだけとし、AI は実行しない。
 
           # タスクタイトル
           ${TASK_TITLE}
@@ -110,8 +124,9 @@ jobs:
           ## ゴール
           ## 変更対象ファイル
           ## 手順（チェックリスト）
-          ## テスト
-          ## 完了条件
+          ## テスト（Docker Compose 経由のコマンドを含める。デプロイコマンドは書かない）
+          ## ブロッカー（デプロイ等・人が行う項目のみ）
+          ## 完了条件（Draft PR まで。デプロイ完了は含めない）
           EOF
           )
 
@@ -120,7 +135,7 @@ jobs:
           claude -p "$PROMPT" \
             --output-format text \
             --permission-mode bypassPermissions \
-            --max-turns 8 \
+            --max-turns 12 \
             > .ai_todo.md
 
           if [ ! -s .ai_todo.md ]; then
@@ -141,6 +156,17 @@ jobs:
               exit 1
             fi
           done
+          # 表面だけの手順書を弾く（ソースパスや検証コマンドが無い）
+          if ! grep -Eq '\.(go|ts|tsx|js|py|md)|`[^`]+`|lambdas/|src/|pkg/' .ai_todo.md; then
+            echo "Invalid .ai_todo.md: no concrete source paths" >&2
+            head -n 80 .ai_todo.md >&2
+            exit 1
+          fi
+          if ! grep -Eqi 'docker compose|docker-compose|go test|go build|npm test|npm run|pytest|cargo test|make test' .ai_todo.md; then
+            echo "Invalid .ai_todo.md: missing Docker or local verify commands" >&2
+            head -n 120 .ai_todo.md >&2
+            exit 1
+          fi
 
           echo "----- .ai_todo.md -----"
           head -n 40 .ai_todo.md
@@ -151,7 +177,7 @@ jobs:
           git commit -m "docs(ai): add .ai_todo.md for Notion task ${DISPATCH_ID}"
           git push -u origin HEAD
 
-      - name: Notion → AI実装中
+      - name: Notion → AI実装中 + 設計コメント
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         run: |
@@ -159,11 +185,66 @@ jobs:
             echo "Skip Notion update (missing secrets/page_id)"
             exit 0
           fi
+
           curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
             -H "Authorization: Bearer ${NOTION_TOKEN}" \
             -H "Notion-Version: 2022-06-28" \
             -H "Content-Type: application/json" \
             -d '{"properties":{"AIステータス":{"select":{"name":"AI実装中"}}}}'
+
+          GOAL=$(awk '/^## ゴール/{flag=1; next} /^## /{flag=0} flag' .ai_todo.md | sed '/^$/d' | head -n 8 | tr '\n' ' ')
+          FILES=$(awk '/^## 変更対象ファイル/{flag=1; next} /^## /{flag=0} flag' .ai_todo.md | sed '/^$/d' | head -n 10 | tr '\n' ' / ')
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          COMMENT=$(printf '📝 設計完了 → AI実装中に移行\nゴール: %s\n変更予定: %s\nActions: %s' \
+            "${GOAL:-(未抽出)}" "${FILES:-(未抽出)}" "$RUN_URL")
+          COMMENT="${COMMENT:0:1900}"
+
+          curl -sS -X POST "https://api.notion.com/v1/comments" \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Notion-Version: 2022-06-28" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n --arg page "$NOTION_PAGE_ID" --arg text "$COMMENT" '{
+              parent: { page_id: $page },
+              rich_text: [{ type: "text", text: { content: $text } }]
+            }')"
+
+      - name: Notion → AI失敗 (design)
+        if: failure()
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+        run: |
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          MSG="Phase1(設計) 失敗: ${RUN_URL}"
+          if [ -n "${NOTION_TOKEN:-}" ] && [ -n "${NOTION_PAGE_ID:-}" ]; then
+            curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
+              -H "Authorization: Bearer ${NOTION_TOKEN}" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -n --arg msg "${MSG:0:1900}" '{
+                properties: {
+                  "AIステータス": { select: { name: "AI失敗" } },
+                  "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
+                }
+              }')"
+            curl -sS -X POST "https://api.notion.com/v1/comments" \
+              -H "Authorization: Bearer ${NOTION_TOKEN}" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -n --arg page "$NOTION_PAGE_ID" --arg text "⚠️ ${MSG}" '{
+                parent: { page_id: $page },
+                rich_text: [{ type: "text", text: { content: $text } }]
+              }')"
+          fi
+          if [ -n "${SLACK_TOKEN:-}" ]; then
+            curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+              -H "Authorization: Bearer ${SLACK_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -n --arg text "⚠️ AI設計失敗\nタスク: ${TASK_TITLE}\n${MSG}" '{
+                channel: "U0AP2H08DE3",
+                text: $text
+              }')" >/dev/null || true
+          fi
 
   implement:
     name: Phase2 Implement + PR
@@ -174,6 +255,53 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.design.outputs.branch }}
+
+      - name: Bootstrap Docker Compose env
+        id: docker
+        run: |
+          set -euo pipefail
+          if [ ! -f docker-compose.yml ] && [ ! -f compose.yml ]; then
+            echo "has_compose=false" >> "$GITHUB_OUTPUT"
+            echo "No docker-compose.yml — skip Docker bootstrap"
+            exit 0
+          fi
+          echo "has_compose=true" >> "$GITHUB_OUTPUT"
+
+          # compose が参照する env ファイルをテンプレから用意（無いと up が落ちる）
+          if [ -f .env.example ] && [ ! -f .env.local ]; then
+            cp .env.example .env.local
+            echo "Created .env.local from .env.example"
+          fi
+          if [ -f clients/jackson-office/dev.env.example ] && [ ! -f clients/jackson-office/dev.env ]; then
+            mkdir -p clients/jackson-office
+            cp clients/jackson-office/dev.env.example clients/jackson-office/dev.env
+            echo "Created clients/jackson-office/dev.env from example"
+          fi
+
+          # bind mount 先が無くても落ちないように空ディレクトリを用意
+          mkdir -p "$HOME/.aws" "$HOME/.ssh" "$HOME/.claude" "$HOME/.config/gh"
+          touch "$HOME/.ssh/known_hosts" || true
+
+          export HOST_UID="$(id -u)"
+          export HOST_GID="$(id -g)"
+          export HOST_PROJECT_ROOT="${PWD}"
+          export AWS_REGION="${AWS_REGION:-ap-northeast-1}"
+
+          echo "Starting docker compose..."
+          docker compose up -d --build
+
+          # app サービスがあれば ready 待ち（最大 ~3分）
+          for i in $(seq 1 36); do
+            if docker compose ps --status running 2>/dev/null | grep -Eq 'app|postgres'; then
+              echo "Compose services are up (attempt $i)"
+              break
+            fi
+            sleep 5
+          done
+          docker compose ps
+          # 動作確認用の最小 exec（失敗してもここでは落とさない。実装 AI が再試行）
+          docker compose exec -T app sh -lc 'pwd && (go version || true) && (node -v || true)' \
+            || echo "warn: docker compose exec app smoke failed (AI will retry)"
 
       - name: Claude Code implement from .ai_todo.md
         id: claude
@@ -189,20 +317,51 @@ jobs:
 
             【重要・無人CI制約】
             - ユーザー承認・確認ダイアログは出ない前提で進めること。
-            - ファイル編集・テスト実行・git/gh 操作はすべて自動実行してよい。
-            - 「許可を待っています」等の返答は禁止。実装して Draft PR まで完了させる。
+            - ファイル編集・テスト実行・git/gh 操作・Docker 操作はすべて自動実行してよい。
+            - 「許可を待っています」等の返答は禁止。
+            - **成果物の上限は Draft PR 作成まで。デプロイは一切しない。**
+
+            【デプロイ禁止（厳守）】
+            - AWS / CDK / CloudFormation / 本番・ステージングへのデプロイは禁止。
+            - 禁止コマンド例: `cdk deploy`, `cdk deploy --all`, `aws cloudformation deploy`, `aws lambda update-function-code` 等の本番反映。
+            - デプロイが後続で必要な場合は PR 本文の「ブロッカー（人の手でデプロイ）」に書くだけ。自分では実行しない。
+
+            【実行環境 = リポジトリの Docker Compose（必須）】
+            - ルートに `docker-compose.yml`（または `compose.yml`）がある。これが正式な開発環境。
+            - 作業前に状態確認: `docker compose ps`
+            - 止まっていれば: `docker compose up -d --build`（ローカル開発コンテナの起動のみ。AWS デプロイではない）
+            - 検証・ビルド・テストはホスト直実行より **コンテナ内** を優先:
+              - `docker compose exec -T app <command>`
+              - 例: `docker compose exec -T app sh -lc 'cd lambdas && go test ./...'`
+              - 例: `docker compose exec -T app sh -lc 'npm test'`
+            - core-RAG のように postgres サービスがある場合は依存サービス起動後に検証する。
+            - 「CI に環境が無い」「認証が無いので静的レビューだけ」は、Compose を試す前の断念なので禁止。
+            - Compose で再現・検証できる項目を docs だけの代替で完了扱いにしない。
+
+            【断念禁止・深掘り必須】
+            - エラーや一時失敗だけで打ち切らない。ソース内部（handler / service / repository / test）を読み、呼び出し関係を追う。
+            - Docker 内で可能な build/test/再現を必ず実行し、失敗したら修正して再実行する。
+            - デプロイや本番 API 操作が必要な項目は PR 本文「ブロッカー」に分離する（実行しない）。
+            - 一時的なコマンド失敗は原因を直して再実行する（1回失敗で諦めない）。
 
             リポジトリ直下の `.ai_todo.md` を唯一の手順書として扱い、記載どおりに実装してください。
             - `.ai_todo.md` の順番を守り、範囲外の変更はしない
-            - テストがあれば実行し、失敗したら修正して再実行
-            - 完了後、変更をコミットし Draft PR を作成する
+            - テストは Docker Compose 経由で実行し、失敗したら修正して再実行
+            - 完了後、変更をコミットし **Draft PR を作成して終了**（マージ・デプロイはしない）
             - PR タイトルは Notion タスク「${{ env.TASK_TITLE }}」を含める
             - PR 本文に Notion page id `${{ env.NOTION_PAGE_ID }}` と `.ai_todo.md` への言及を入れる
+            - PR 本文に「対応内容サマリー」（変更したファイルと要点を3〜8行）を必ず書く
+            - PR 本文に「実施した検証コマンドと結果」（`docker compose ...` を含む）を必ず書く
+            - デプロイ等・人が行う未実施項目があれば「ブロッカー」節に明示する
           claude_args: |
-            --max-turns 60
+            --max-turns 100
             --permission-mode bypassPermissions
 
-      - name: Find PR URL
+      - name: Tear down Docker Compose
+        if: always() && steps.docker.outputs.has_compose == 'true'
+        run: docker compose down --remove-orphans || true
+
+      - name: Find PR URL + summary
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -217,12 +376,111 @@ jobs:
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
           echo "PR_URL=${URL}"
 
-      - name: Notion → PR作成済
+          SUMMARY=""
+          FILES=""
+          if [ -n "$URL" ]; then
+            SUMMARY=$(gh pr view "$URL" --json body --jq '.body // ""' | head -c 800 || true)
+            FILES=$(gh pr view "$URL" --json files --jq '[.files[].path] | join(", ")' 2>/dev/null | head -c 500 || true)
+          fi
+          {
+            echo "summary<<EOF"
+            echo "${SUMMARY}"
+            echo "EOF"
+            echo "files<<EOF"
+            echo "${FILES}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Quality gate — 表面逃げ / 断念 PR を失敗扱い
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          TASK_TITLE: ${{ env.TASK_TITLE }}
+          TASK_TODO: ${{ env.TASK_TODO }}
+          TASK_DONE: ${{ env.TASK_DONE }}
+          HAS_COMPOSE: ${{ steps.docker.outputs.has_compose }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_URL:-}" ]; then
+            echo "No PR URL — fail quality gate"
+            exit 1
+          fi
+
+          BODY=$(gh pr view "$PR_URL" --json body --jq '.body // ""')
+          PATHS=$(gh pr view "$PR_URL" --json files --jq '[.files[].path] | join("\n")')
+          echo "Changed files:"
+          echo "$PATHS"
+
+          # docs / .ai_todo 以外の変更があるか
+          NON_DOC=$(echo "$PATHS" | grep -vE '^\.ai_todo\.md$|^docs/|\.md$' || true)
+          ONLY_DOCS=0
+          if [ -z "${NON_DOC}" ]; then
+            ONLY_DOCS=1
+          fi
+
+          # タスクがドキュメント／調査記録専用か（タイトル/やること/完了条件から判定）
+          TASK_BLOB="${TASK_TITLE}
+${TASK_TODO}
+${TASK_DONE}"
+          DOCS_TASK=0
+          if echo "$TASK_BLOB" | grep -Eqi 'README|ドキュメント|docs only|ドキュメント整理|共通節を追加|調査|洗い出し|現状確認|動作確認|investigation'; then
+            DOCS_TASK=1
+          fi
+
+          # 断念・代替完了を示す文言（環境不足で打ち切ったパターン）
+          ABANDON=0
+          if echo "$BODY" | grep -Eqi '実施できなかった|静的レビューで代替|認証情報.*なく|到達性がなく|再実行を推奨|サンドボックス.*なく|環境が無'; then
+            ABANDON=1
+          fi
+
+          USED_DOCKER=0
+          if echo "$BODY" | grep -Eqi 'docker compose|docker-compose'; then
+            USED_DOCKER=1
+          fi
+
+          DEPLOYED=0
+          if echo "$BODY" | grep -Eqi 'cdk deploy|cloudformation deploy|デプロイ完了|deployed to|本番反映'; then
+            DEPLOYED=1
+          fi
+
+          echo "ONLY_DOCS=${ONLY_DOCS} DOCS_TASK=${DOCS_TASK} ABANDON=${ABANDON} HAS_COMPOSE=${HAS_COMPOSE} USED_DOCKER=${USED_DOCKER} DEPLOYED=${DEPLOYED}"
+
+          # 典型悪い例: 環境不足などで断念
+          if [ "$ABANDON" = "1" ]; then
+            echo "::error::環境不足などで本対応を断念した記述があります。Docker Compose での実行・検証まで終わっていないため失敗扱いにします。"
+            exit 1
+          fi
+
+          if [ "$DEPLOYED" = "1" ]; then
+            echo "::error::デプロイ実行の記述があります。本パイプラインは Draft PR 作成までが上限です。"
+            exit 1
+          fi
+
+          if [ "${HAS_COMPOSE:-false}" = "true" ] && [ "$USED_DOCKER" = "0" ] && [ "$DOCS_TASK" = "0" ]; then
+            echo "::error::docker-compose があるリポなのに PR 本文に Docker Compose 経由の検証記録がありません。"
+            exit 1
+          fi
+
+          if [ "$ONLY_DOCS" = "1" ] && [ "$DOCS_TASK" = "0" ]; then
+            echo "::error::ドキュメント/調査専用タスクではないのに docs/.md のみの変更です。ソース内部までの対応が不足しています。"
+            exit 1
+          fi
+
+          echo "Quality gate passed"
+
+      - name: Notion → PR作成済 + 結果コメント
         if: success() && steps.pr.outputs.url != ''
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
           PR_URL: ${{ steps.pr.outputs.url }}
+          PR_SUMMARY: ${{ steps.pr.outputs.summary }}
+          PR_FILES: ${{ steps.pr.outputs.files }}
         run: |
+          set -euo pipefail
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
           curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
             -H "Authorization: Bearer ${NOTION_TOKEN}" \
             -H "Notion-Version: 2022-06-28" \
@@ -235,19 +493,70 @@ jobs:
               }
             }')"
 
+          # PR本文から対応サマリーを短く整形（空ならファイル一覧で代替）
+          SHORT_SUMMARY=$(printf '%s' "$PR_SUMMARY" | tr '\n' ' ' | sed 's/  */ /g' | head -c 700)
+          if [ -z "${SHORT_SUMMARY// /}" ]; then
+            SHORT_SUMMARY="変更ファイル: ${PR_FILES:-(取得できず)}"
+          fi
+
+          COMMENT=$(printf '✅ AI実装完了（PR作成済）\nPR: %s\n変更ファイル: %s\n対応サマリー: %s\nActions: %s' \
+            "$PR_URL" "${PR_FILES:-(なし)}" "$SHORT_SUMMARY" "$RUN_URL")
+          COMMENT="${COMMENT:0:1900}"
+
+          curl -sS -X POST "https://api.notion.com/v1/comments" \
+            -H "Authorization: Bearer ${NOTION_TOKEN}" \
+            -H "Notion-Version: 2022-06-28" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n --arg page "$NOTION_PAGE_ID" --arg text "$COMMENT" '{
+              parent: { page_id: $page },
+              rich_text: [{ type: "text", text: { content: $text } }]
+            }')"
+
+          if [ -n "${SLACK_TOKEN:-}" ]; then
+            SLACK_TEXT=$(printf '✅ AI実装完了\nタスク: %s\nPR: %s\n変更: %s\nNotion page: %s' \
+              "$TASK_TITLE" "$PR_URL" "${PR_FILES:-(なし)}" "$NOTION_PAGE_ID")
+            curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+              -H "Authorization: Bearer ${SLACK_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -n --arg text "$SLACK_TEXT" '{
+                channel: "U0AP2H08DE3",
+                text: $text
+              }')" >/dev/null || true
+          fi
+
       - name: Notion → AI失敗
         if: failure()
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
         run: |
           MSG="GitHub Actions implement failed. run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
-            -H "Authorization: Bearer ${NOTION_TOKEN}" \
-            -H "Notion-Version: 2022-06-28" \
-            -H "Content-Type: application/json" \
-            --data "$(jq -n --arg msg "$MSG" '{
-              properties: {
-                "AIステータス": { select: { name: "AI失敗" } },
-                "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
-              }
-            }')"
+          if [ -n "${NOTION_TOKEN:-}" ] && [ -n "${NOTION_PAGE_ID:-}" ]; then
+            curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
+              -H "Authorization: Bearer ${NOTION_TOKEN}" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -n --arg msg "$MSG" '{
+                properties: {
+                  "AIステータス": { select: { name: "AI失敗" } },
+                  "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
+                }
+              }')"
+            curl -sS -X POST "https://api.notion.com/v1/comments" \
+              -H "Authorization: Bearer ${NOTION_TOKEN}" \
+              -H "Notion-Version: 2022-06-28" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -n --arg page "$NOTION_PAGE_ID" --arg text "⚠️ ${MSG}" '{
+                parent: { page_id: $page },
+                rich_text: [{ type: "text", text: { content: $text } }]
+              }')"
+          fi
+          if [ -n "${SLACK_TOKEN:-}" ]; then
+            curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+              -H "Authorization: Bearer ${SLACK_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -n --arg text "⚠️ AI実装失敗\nタスク: ${TASK_TITLE}\n${MSG}" '{
+                channel: "U0AP2H08DE3",
+                text: $text
+              }')" >/dev/null || true
+          fi

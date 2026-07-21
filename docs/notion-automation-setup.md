@@ -15,7 +15,7 @@ Notion の **オートメーションは有料プラン向け**のため、無�
 |------|------|
 | `NOTION_TOKEN` | 必須 |
 | `GITHUB_PAT` | 必須 |
-| `SLACK_TOKEN` | 任意（失敗通知） |
+| `SLACK_TOKEN` | 推奨（開始/失敗の DM 通知。無いと Slack 通知のみスキップ） |
 | `WEBHOOK_SECRET` | **不要**（ポーリングだけなら） |
 
 ### 3. トリガーを一度だけ設定
@@ -42,6 +42,8 @@ GAS エディタで:
 6. 期待:
    - `AIステータス` → `AI設計中`
    - `Dispatch ID` が入る
+   - Notion コメント「AI依頼を受け付けました」
+   - Slack DM「AI依頼を開始」（`SLACK_TOKEN` 設定時）
 
 ---
 
@@ -51,8 +53,12 @@ GAS エディタで:
 Notion で AIステータス = AIに依頼
         ↓（最大5分）
 GAS pollAiRequests
-        ↓
+        ↓ Slack「開始」+ Notionコメント
 GitHub repository_dispatch (notion-ai-task)
+        ↓
+Actions: 設計 → 実装 → PR
+        ↓ Slack「完了/失敗」+ Notionコメント（対応サマリー）
+Notion: AIステータス / PR URL 更新
 ```
 
 Web App デプロイや Notion Automation は **不要**です。

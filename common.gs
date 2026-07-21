@@ -77,3 +77,16 @@ function notionPatch_(token, url, payload) {
   });
   return JSON.parse(res.getContentText());
 }
+
+/**
+ * ページへのコメント投稿（結果・進捗の見える化用）
+ * Notion API: POST /v1/comments
+ */
+function notionCreateComment_(token, pageId, text) {
+  const content = String(text || '').slice(0, 1900);
+  if (!content || !pageId) return null;
+  return notionPost_(token, 'https://api.notion.com/v1/comments', {
+    parent: { page_id: pageId },
+    rich_text: [{ type: 'text', text: { content: content } }],
+  });
+}

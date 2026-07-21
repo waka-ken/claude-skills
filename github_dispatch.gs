@@ -47,11 +47,26 @@ function pollAiRequests() {
     const title = getTitleFromPage_(page);
     try {
       const result = processAiDispatch_(notionToken, githubPat, pageId);
+      if (!result.skipped && slackToken) {
+        notifySlack_(
+          slackToken,
+          `🚀 AI依頼を開始\n` +
+            `タスク: ${title}\n` +
+            `リポ: ${result.repository}\n` +
+            `Dispatch ID: ${result.dispatch_id}\n` +
+            `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
+        );
+      }
       results.push({ pageId, title, ok: true, ...result });
     } catch (err) {
       const message = err?.message || String(err);
       try {
         markAiFailure_(notionToken, pageId, message);
+        notionCreateComment_(
+          notionToken,
+          pageId,
+          `⚠️ AI依頼の起動に失敗しました\n${message}`
+        );
       } catch (_) { /* ignore */ }
       if (slackToken) {
         notifySlack_(slackToken, `⚠️ AI Dispatch 失敗\n${title}\n${message}`);
@@ -157,11 +172,26 @@ function doPost(e) {
 
   try {
     const result = processAiDispatch_(notionToken, githubPat, pageId);
+    if (!result.skipped && slackToken) {
+      notifySlack_(
+        slackToken,
+        `🚀 AI依頼を開始\n` +
+          `タスク: ${result.title}\n` +
+          `リポ: ${result.repository}\n` +
+          `Dispatch ID: ${result.dispatch_id}\n` +
+          `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
+      );
+    }
     return jsonResponse_(200, { ok: true, ...result });
   } catch (err) {
     const message = err?.message || String(err);
     try {
       markAiFailure_(notionToken, pageId, message);
+      notionCreateComment_(
+        notionToken,
+        pageId,
+        `⚠️ AI依頼の起動に失敗しました\n${message}`
+      );
     } catch (_) { /* ignore secondary failure */ }
 
     if (slackToken) {
@@ -282,6 +312,16 @@ function processAiDispatch_(notionToken, githubPat, pageId) {
       'タグ': { status: { name: '進行中' } },
     },
   });
+
+  notionCreateComment_(
+    notionToken,
+    pageId,
+    `🚀 AI依頼を受け付けました\n` +
+      `リポジトリ: ${repoFullName}\n` +
+      `Dispatch ID: ${dispatchId}\n` +
+      `ステータス: AI設計中\n` +
+      `次の工程: 設計（.ai_todo.md）→ 実装 → Draft PR 作成`
+  );
 
   return {
     skipped: false,

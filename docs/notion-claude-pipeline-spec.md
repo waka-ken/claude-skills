@@ -71,7 +71,7 @@
 | `NOTION_TOKEN` | タスク本文・リポ解決に使用 |
 | `GITHUB_PAT` | Repository Dispatch 認証 |
 | `WEBHOOK_SECRET` | Notion → GAS 簡易認証 |
-| `SLACK_TOKEN` | 失敗通知（任意・既存） |
+| `SLACK_TOKEN` | 開始・失敗の DM 通知（推奨・既存の朝タスク通知と同じ） |
 
 ### 受信（From: Notion Automation）
 
@@ -89,7 +89,8 @@
 3. ブロック API で本文を取得し「背景 / やること / 完了条件」を抽出
 4. `GitHubリポジトリ` を解決（タスク優先 → プロジェクトフォールバック。未設定なら `AI失敗`）
 5. `POST /repos/{owner}/{repo}/dispatches`（`event_type: notion-ai-task`）
-6. 成功: `AIステータス=AI設計中`、`Dispatch ID` 記録 / 失敗: `AI失敗` + `AI最終エラー`
+6. 成功: `AIステータス=AI設計中`、`Dispatch ID` 記録、Notion コメント「受付」、Slack「開始」
+7. 失敗: `AI失敗` + `AI最終エラー` + Notion コメント + Slack
 
 ### Repository Dispatch payload（client_payload）
 
@@ -112,9 +113,9 @@ Notion オートメーションは有料のため、**GAS の5分ポーリング
 ## 6. GitHub Actions（対象リポ）
 
 - トリガー: `repository_dispatch` / `notion-ai-task`
-- Phase 1: 設計 → `.ai_todo.md` → Notion `AI実装中`
-- Phase 2: Claude Code Action → PR → Notion `PR作成済` + `PR URL`
-- 失敗: `AI失敗` + `AI最終エラー`
+- Phase 1: 設計 → `.ai_todo.md` → Notion `AI実装中` + 設計コメント
+- Phase 2: Claude Code Action → PR → Notion `PR作成済` + `PR URL` + **結果コメント** + Slack 完了通知
+- 失敗: `AI失敗` + `AI最終エラー` + コメント + Slack
 - サンプル: [`docs/workflows/notion-ai-task.yml`](workflows/notion-ai-task.yml)
 
 ## 7. なぜこの構成か

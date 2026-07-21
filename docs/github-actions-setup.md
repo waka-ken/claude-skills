@@ -16,7 +16,8 @@
 | Name | 内容 |
 |------|------|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth（`claude setup-token` で生成。Pro/Max 枠を使用） |
-| `NOTION_TOKEN` | Notion Integration（オールタスク管理 / プロジェクトDBへ接続済み） |
+| `NOTION_TOKEN` | Notion Integration（オールタスク管理 / プロジェクトDBへ接続済み。コメント投稿権限も必要） |
+| `SLACK_TOKEN` | （任意）完了・失敗の DM 通知。GAS と同じ Bot Token（`xoxb-...`） |
 
 `GITHUB_TOKEN` は Actions 既定で足りる（contents / pull-requests）。
 
@@ -55,8 +56,20 @@ gh api repos/waka-ken/jackson-office-api/dispatches \
 
 ## 5. 期待フロー
 
-1. `design` job が `.ai_todo.md` を生成して push
-2. Notion `AIステータス` → `AI実装中`
-3. `implement` job が Claude Code Action で実装し PR 作成
-4. Notion `AIステータス` → `PR作成済`、`PR URL` 書き戻し
-5. 失敗時 → `AI失敗` + `AI最終エラー`
+1. `design` job が `.ai_todo.md` を生成して push（ソースパス・ローカル検証コマンド必須）
+2. Notion `AIステータス` → `AI実装中` + 設計コメント（ゴール／変更予定）
+3. `implement` job が Claude Code Action で実装し **Draft PR 作成まで**（デプロイ禁止）
+4. **品質ゲート**: 環境不足での断念記述や、実装タスクなのに docs のみ、デプロイ実行の記述は失敗扱い
+5. Notion `AIステータス` → `PR作成済`、`PR URL` 書き戻し + **結果コメント**（変更ファイル・対応サマリー）
+6. Slack DM に完了通知（`SLACK_TOKEN` 設定時）
+7. 失敗時 → `AI失敗` + `AI最終エラー` + コメント + Slack
+
+### 成果物の上限
+
+**Draft PR まで。** `cdk deploy` 等の AWS / 本番デプロイは禁止。必要なデプロイは PR の「ブロッカー」に残し人が行う。
+
+### よくある「浅い対応」への対策
+
+両対象リポはルートの `docker-compose.yml` が正式な開発環境。Actions では Phase2 前に Compose を起動し、AI に `docker compose exec app ...` での検証を必須にしている。  
+「認証が無いので静的レビューだけ」は品質ゲートで失敗になる。  
+Compose はローカル検証用であり、AWS デプロイではない。

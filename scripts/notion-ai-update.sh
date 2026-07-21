@@ -4,6 +4,7 @@
 #   NOTION_TOKEN=... NOTION_PAGE_ID=... ./notion-ai-update.sh implement
 #   NOTION_TOKEN=... NOTION_PAGE_ID=... PR_URL=... ./notion-ai-update.sh pr
 #   NOTION_TOKEN=... NOTION_PAGE_ID=... ERROR_MSG=... ./notion-ai-update.sh fail
+#   NOTION_TOKEN=... NOTION_PAGE_ID=... COMMENT=... ./notion-ai-update.sh comment
 
 set -euo pipefail
 
@@ -17,9 +18,31 @@ if [[ -z "$MODE" || -z "$PAGE_ID" || -z "$TOKEN" ]]; then
   exit 1
 fi
 
+notion_comment_() {
+  local text="${1:-}"
+  text="${text:0:1900}"
+  [[ -z "$text" ]] && return 0
+  curl -sS -X POST "https://api.notion.com/v1/comments" \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Notion-Version: ${VERSION}" \
+    -H "Content-Type: application/json" \
+    --data "$(jq -n --arg page "$PAGE_ID" --arg text "$text" '{
+      parent: { page_id: $page },
+      rich_text: [{ type: "text", text: { content: $text } }]
+    }')"
+  echo
+}
+
 case "$MODE" in
   implement)
     BODY='{"properties":{"AIステータス":{"select":{"name":"AI実装中"}}}}'
+    curl -sS -X PATCH "https://api.notion.com/v1/pages/${PAGE_ID}" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Notion-Version: ${VERSION}" \
+      -H "Content-Type: application/json" \
+      -d "$BODY"
+    echo
+    notion_comment_ "${COMMENT:-📝 設計完了 → AI実装中に移行}"
     ;;
   pr)
     PR_URL="${PR_URL:-}"
@@ -34,6 +57,14 @@ case "$MODE" in
         "AI最終エラー": { rich_text: [] }
       }
     }')
+    curl -sS -X PATCH "https://api.notion.com/v1/pages/${PAGE_ID}" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Notion-Version: ${VERSION}" \
+      -H "Content-Type: application/json" \
+      -d "$BODY"
+    echo
+    notion_comment_ "${COMMENT:-✅ AI実装完了（PR作成済）
+PR: ${PR_URL}}"
     ;;
   fail)
     MSG="${ERROR_MSG:-unknown error}"
@@ -43,16 +74,23 @@ case "$MODE" in
         "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
       }
     }')
+    curl -sS -X PATCH "https://api.notion.com/v1/pages/${PAGE_ID}" \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Notion-Version: ${VERSION}" \
+      -H "Content-Type: application/json" \
+      -d "$BODY"
+    echo
+    notion_comment_ "${COMMENT:-⚠️ ${MSG:0:1800}}"
+    ;;
+  comment)
+    if [[ -z "${COMMENT:-}" ]]; then
+      echo "COMMENT required" >&2
+      exit 1
+    fi
+    notion_comment_ "$COMMENT"
     ;;
   *)
-    echo "Unknown mode: $MODE (implement|pr|fail)" >&2
+    echo "Unknown mode: $MODE (implement|pr|fail|comment)" >&2
     exit 1
     ;;
 esac
-
-curl -sS -X PATCH "https://api.notion.com/v1/pages/${PAGE_ID}" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Notion-Version: ${VERSION}" \
-  -H "Content-Type: application/json" \
-  -d "$BODY"
-echo
