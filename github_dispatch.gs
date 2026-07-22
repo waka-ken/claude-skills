@@ -141,14 +141,27 @@ function syncGithubRepoSelectOptions() {
 }
 
 /**
- * Notion Automation / 外部からの Webhook 入口（有料プラン等・任意）
+ * Notion Automation / 外部からの Webhook 入口
+ * - Slack Interactivity（ボタン / モーダル）
+ * - Slack Events
+ * - Notion Automation（AI Dispatch）
  */
 function doPost(e) {
   const props = PropertiesService.getScriptProperties();
-  const notionToken    = props.getProperty('NOTION_TOKEN');
-  const githubPat      = props.getProperty('GITHUB_PAT');
-  const webhookSecret  = props.getProperty('WEBHOOK_SECRET');
-  const slackToken     = props.getProperty('SLACK_TOKEN');
+
+  // Slack Interactivity / Slash は application/x-www-form-urlencoded で payload=JSON
+  const formPayload = parseSlackFormPayload_(e);
+  if (formPayload) {
+    try {
+      Logger.log('Slack interaction type=' + formPayload.type);
+      const result = handleEmailAlertSlackInteraction_(formPayload);
+      // Slack は空 200、または response_action のみ受け付ける（独自 JSON は「接続できない」になる）
+      return slackAckResponse_(result);
+    } catch (err) {
+      Logger.log('Slack interaction error: ' + (err?.message || err));
+      return slackAckResponse_(null);
+    }
+  }
 
   let body = {};
   try {
@@ -156,6 +169,25 @@ function doPost(e) {
   } catch (err) {
     return jsonResponse_(400, { ok: false, error: 'invalid_json' });
   }
+
+  // Slack URL 検証 / イベント
+  if (body.type === 'url_verification') {
+    return ContentService.createTextOutput(body.challenge || '');
+  }
+  if (body.type === 'event_callback' || body.event) {
+    try {
+      const result = handleEmailAlertSlackEvent_(body, e);
+      return jsonResponse_(200, result || { ok: true });
+    } catch (err) {
+      Logger.log('Slack event handler error: ' + (err?.message || err));
+      return jsonResponse_(200, { ok: false, error: err?.message || String(err) });
+    }
+  }
+
+  const notionToken    = props.getProperty('NOTION_TOKEN');
+  const githubPat      = props.getProperty('GITHUB_PAT');
+  const webhookSecret  = props.getProperty('WEBHOOK_SECRET');
+  const slackToken     = props.getProperty('SLACK_TOKEN');
 
   if (!webhookSecret || body.secret !== webhookSecret) {
     return jsonResponse_(401, { ok: false, error: 'unauthorized' });
@@ -198,6 +230,36 @@ function doPost(e) {
       notifySlack_(slackToken, `⚠️ AI Dispatch 失敗\npage: ${pageId}\n${message}`);
     }
     return jsonResponse_(500, { ok: false, error: message });
+  }
+}
+
+/** Slack の form POST から payload JSON を取り出す */
+function parseSlackFormPayload_(e) {
+  if (e?.parameter?.payload) {
+    try {
+      return JSON.parse(e.parameter.payload);
+    } catch (_) {
+      return null;
+    }
+  }
+  const contents = e?.postData?.contents || '';
+  const type = e?.postData?.type || '';
+  if (type.indexOf('application/x-www-form-urlencoded') === -1 && contents.indexOf('payload=') === -1) {
+    return null;
+  }
+  const params = {};
+  String(contents).split('&').forEach(function (pair) {
+    const idx = pair.indexOf('=');
+    if (idx < 0) return;
+    const k = decodeURIComponent(pair.slice(0, idx).replace(/\+/g, ' '));
+    const v = decodeURIComponent(pair.slice(idx + 1).replace(/\+/g, ' '));
+    params[k] = v;
+  });
+  if (!params.payload) return null;
+  try {
+    return JSON.parse(params.payload);
+  } catch (_) {
+    return null;
   }
 }
 
@@ -507,4 +569,18 @@ function jsonResponse_(_status, obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Slack Interactivity 用レスポンス。
+ * - null / 通常オブジェクト → 空ボディ（成功）
+ * - { response_action: ... } → そのまま JSON
+ */
+function slackAckResponse_(result) {
+  if (result && result.response_action) {
+    return ContentService
+      .createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput('');
 }
