@@ -1,5 +1,5 @@
 /**
- * 日次タスクレポート（統合版）
+ * 議事録タスク抽出
  * Google Apps Script
  *
  * ※ 共通定数・ヘルパーは common.gs を参照
@@ -10,11 +10,7 @@
  *   ① 未着手議事録からTODOチェックボックスを抽出
  *      → Geminiでタスク名を整形 → Notionにタスク登録
  *      → 議事録ページのタグを「完了」に更新
- *   ② Notionの残タスク（未着手・進行中）を収集
- *      （①で追加したタスクも含まれる）
- *   ③ 本日のSlackメッセージ（チャンネル＋DM）を収集
- *   ④ Gemini AIで②③を統合・優先度整理
- *   ⑤ 議事録抽出サマリー＋AI整理タスクをSlack通知
+ *   ※ Slack への日次通知は行わない（結果は Logger に出力）
  *
  * 【初回セットアップ手順】
  *   1. script.google.com で common.gs / notion_task_extractor.gs /
@@ -23,11 +19,6 @@
  *   2. スクリプトプロパティを common.gs の説明に従って設定
  *   3. setupDailyTrigger() を一度だけ手動実行
  *   4. testDailyRun() で動作確認
- *
- * 【必要なSlackスコープ】
- *   chat:write, im:write  : 既存
- *   channels:history      : チャンネル投稿履歴の読み取り（追加）
- *   im:history            : DM投稿履歴の読み取り（追加）
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  */
 
@@ -45,34 +36,21 @@ function runDailyTaskReport() {
   const props        = PropertiesService.getScriptProperties();
   const notionToken  = props.getProperty('NOTION_TOKEN');
   const geminiApiKey = props.getProperty('GEMINI_API_KEY');
-  const slackToken   = props.getProperty('SLACK_TOKEN');
   const today        = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
-  const todayDisplay = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd');
 
   try {
-    // ① 議事録 → Notionタスク登録
+    // ① 議事録 → Notionタスク登録（Slack通知なし）
     const minutesResult = processMinutes_(notionToken, geminiApiKey, today);
-
-    // ② Notion残タスク収集（①の登録分も含む）
-    const notionTasks = fetchRemainingTasks_(notionToken);
-
-    // ③ 本日のSlackメッセージ収集
-    const slackMessages = fetchTodaySlackMessages_(slackToken);
-
-    // ④ Gemini AIで整理（タスクもSlackメモも両方0件なら省略）
-    let organizedText = null;
-    if (notionTasks.length > 0 || slackMessages.length > 0) {
-      organizedText = organizeWithGemini_(geminiApiKey, notionTasks, slackMessages, today);
-    }
-
-    // ⑤ Slack通知
-    notifySlack_(slackToken, buildDailyMessage_(todayDisplay, minutesResult, organizedText));
-
-  } catch (e) {
-    notifySlack_(
-      PropertiesService.getScriptProperties().getProperty('SLACK_TOKEN'),
-      `⚠️ 日次タスクレポートでエラーが発生しました（${today}）\nエラー内容: ${e.message}`
+    Logger.log(
+      `議事録抽出完了（${today}）: ` +
+      `処理 ${minutesResult.processedMinutes.length}件 / ` +
+      `追加タスク ${minutesResult.addedTasks.length}件`
     );
+    for (const m of minutesResult.processedMinutes) {
+      Logger.log(`  • ${m.title} → ${m.taskCount}タスク`);
+    }
+  } catch (e) {
+    Logger.log(`⚠️ 議事録抽出でエラー（${today}）: ${e.message}`);
     throw e;
   }
 }
@@ -120,196 +98,6 @@ function processMinutes_(notionToken, geminiApiKey, today) {
   }
 
   return { processedMinutes, addedTasks };
-}
-
-
-// ─────────────────────────────────────────────
-// ② NOTION: 未完了タスクを取得
-// ─────────────────────────────────────────────
-function fetchRemainingTasks_(token) {
-  const res = notionPost_(token, `https://api.notion.com/v1/databases/${ALL_TASKS_DB_ID}/query`, {
-    filter: {
-      or: [
-        { property: 'タグ', status: { equals: '未着手' } },
-        { property: 'タグ', status: { equals: '進行中' } },
-      ],
-    },
-    sorts: [{ property: '期間', direction: 'ascending' }],
-    page_size: 50,
-  });
-
-  return (res.results || []).map(page => {
-    const props     = page.properties;
-    const titleProp = Object.values(props).find(p => p.type === 'title');
-    return {
-      title:    titleProp?.title?.map(t => t.plain_text).join('') || '(無題)',
-      status:   props['タグ']?.status?.name || '',
-      dueDate:  props['期間']?.date?.start || null,
-      priority: props['優先度']?.select?.name || null,
-    };
-  });
-}
-
-
-// ─────────────────────────────────────────────
-// ③ SLACK: 本日のメッセージを収集（チャンネル＋DM）
-// ─────────────────────────────────────────────
-function fetchTodaySlackMessages_(slackToken) {
-  const todayStr    = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
-  const midnightJst = new Date(todayStr + 'T00:00:00+09:00');
-  const oldestTs    = Math.floor(midnightJst.getTime() / 1000).toString();
-
-  const allMessages = [];
-
-  const channelMsgs = getSlackHistory_(slackToken, SLACK_CHANNEL, oldestTs);
-  allMessages.push(...channelMsgs);
-
-  const dmChannelId = openDmChannel_(slackToken, SLACK_USER_DM);
-  if (dmChannelId) {
-    const dmMsgs = getSlackHistory_(slackToken, dmChannelId, oldestTs);
-    allMessages.push(...dmMsgs);
-  }
-
-  return allMessages
-    .filter(m => !m.bot_id && !m.subtype)
-    .sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts))
-    .map(m => m.text || '')
-    .filter(Boolean);
-}
-
-function getSlackHistory_(token, channelId, oldestTs) {
-  const url  = `https://slack.com/api/conversations.history?channel=${encodeURIComponent(channelId)}&oldest=${oldestTs}&limit=200`;
-  const res  = UrlFetchApp.fetch(url, {
-    headers:            { Authorization: `Bearer ${token}` },
-    muteHttpExceptions: true,
-  });
-  const data = JSON.parse(res.getContentText());
-  return data.ok ? (data.messages || []) : [];
-}
-
-function openDmChannel_(token, userId) {
-  const res  = UrlFetchApp.fetch('https://slack.com/api/conversations.open', {
-    method:             'POST',
-    headers:            { Authorization: `Bearer ${token}` },
-    contentType:        'application/json',
-    payload:            JSON.stringify({ users: userId }),
-    muteHttpExceptions: true,
-  });
-  const data = JSON.parse(res.getContentText());
-  return data.ok ? data.channel?.id : null;
-}
-
-
-// ─────────────────────────────────────────────
-// ④ GEMINI: 残タスク＋Slackメモを統合・整理
-// ─────────────────────────────────────────────
-function organizeWithGemini_(apiKey, notionTasks, slackMessages, today) {
-  const taskLines = notionTasks.length > 0
-    ? notionTasks.map(t => {
-        const statusMark  = t.status === '進行中' ? '[進行中]' : '[未着手]';
-        const priorityStr = t.priority ? `【${t.priority}】` : '';
-        const dueStr      = t.dueDate  ? `（期限: ${t.dueDate}）` : '';
-        return `- ${statusMark} ${priorityStr}${t.title}${dueStr}`;
-      }).join('\n')
-    : '（なし）';
-
-  const slackLines = slackMessages.length > 0
-    ? slackMessages.map((m, i) => `${i + 1}. ${m}`).join('\n')
-    : '（なし）';
-
-  const prompt =
-    `あなたはタスク管理アシスタントです。\n` +
-    `本日（${today}）終了時点の情報をもとに、明日以降のアクションを整理してください。\n\n` +
-    `## Notionの残タスク\n${taskLines}\n\n` +
-    `## 本日のSlackメッセージ\n${slackLines}\n\n` +
-    `---\n` +
-    `以下の3区分で出力してください。該当なしの区分は省略すること。\n\n` +
-    `*【要対応】期限切れ・今日期限*\n` +
-    `・タスク名（期限）\n\n` +
-    `*【今週中】*\n` +
-    `・タスク名（期限または理由を一言）\n\n` +
-    `*【Slackより拾ったタスク】*\n` +
-    `・タスク名（元の発言を10字以内で要約）\n\n` +
-    `注意：\n` +
-    `- 期限なし・優先度不明のタスクは「今週中」に含める\n` +
-    `- Notionにすでにある内容と重複するSlackメモは追加しない\n` +
-    `- 1行1タスク、タスク名は20字以内\n` +
-    `- 前置き・まとめ・説明文は不要`;
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-
-  try {
-    const res  = UrlFetchApp.fetch(url, {
-      method:             'POST',
-      contentType:        'application/json',
-      payload:            JSON.stringify({
-        contents:         [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          maxOutputTokens: 4096,
-          temperature:     0.3,
-          thinkingConfig:  { thinkingBudget: 0 },
-        },
-      }),
-      muteHttpExceptions: true,
-    });
-    const raw  = res.getContentText();
-    const data = JSON.parse(raw);
-
-    if (data.error) {
-      Logger.log('Gemini APIエラー: ' + JSON.stringify(data.error));
-      return `⚠️ Gemini APIエラー: ${data.error.message}`;
-    }
-
-    const candidate    = data.candidates?.[0];
-    const finishReason = candidate?.finishReason;
-    const text         = candidate?.content?.parts?.[0]?.text?.trim();
-
-    if (!text) {
-      Logger.log('Gemini レスポンス全体: ' + raw);
-      Logger.log('finishReason: ' + finishReason);
-    }
-
-    if (finishReason === 'SAFETY')     return '⚠️ Geminiがセーフティフィルターによりブロックしました。';
-    if (finishReason === 'MAX_TOKENS') return '⚠️ Geminiの出力がトークン上限に達しました。';
-
-    return text || '⚠️ Geminiのレスポンスが空でした（finishReason: ' + finishReason + '）';
-  } catch (e) {
-    Logger.log('Gemini 例外: ' + e.message);
-    return `⚠️ Gemini API呼び出しエラー: ${e.message}`;
-  }
-}
-
-
-// ─────────────────────────────────────────────
-// ⑤ Slackメッセージ組み立て
-// ─────────────────────────────────────────────
-function buildDailyMessage_(todayDisplay, minutesResult, organizedText) {
-  const lines = [`📋 *日次タスクレポート*（${todayDisplay}）\n`];
-
-  // 議事録セクション
-  if (minutesResult.processedMinutes.length > 0) {
-    lines.push('*━━ 議事録からの新規タスク登録 ━━*');
-    lines.push(`処理した議事録: ${minutesResult.processedMinutes.length}件`);
-    for (const m of minutesResult.processedMinutes) {
-      lines.push(`　• ${m.title} → ${m.taskCount}タスク追加`);
-    }
-    lines.push(`追加タスク合計: ${minutesResult.addedTasks.length}件`);
-    lines.push('');
-  } else {
-    lines.push('*━━ 議事録からの新規タスク登録 ━━*');
-    lines.push('　本日処理対象の「未着手」議事録はありませんでした');
-    lines.push('');
-  }
-
-  // AI整理セクション
-  lines.push('*━━ AIによる残タスク整理 ━━*');
-  if (organizedText) {
-    lines.push(organizedText);
-  } else {
-    lines.push('　本日の残タスクもSlackメモもありませんでした 🎉');
-  }
-
-  return lines.join('\n');
 }
 
 
@@ -489,24 +277,11 @@ function setupDailyTrigger() {
 function testDailyRun() {
   const props       = PropertiesService.getScriptProperties();
   const notionToken = props.getProperty('NOTION_TOKEN');
-  const slackToken  = props.getProperty('SLACK_TOKEN');
 
   const notionRes = notionPost_(notionToken, `https://api.notion.com/v1/databases/${ALL_TASKS_DB_ID}/query`, { page_size: 1 });
   Logger.log('Notion: ' + (notionRes.object === 'list' ? `✅ OK（${notionRes.results?.length}件取得）` : '❌ NG: ' + JSON.stringify(notionRes)));
 
-  const slackAuth = JSON.parse(UrlFetchApp.fetch('https://slack.com/api/auth.test', {
-    headers: { Authorization: `Bearer ${slackToken}` },
-    muteHttpExceptions: true,
-  }).getContentText());
-  Logger.log('Slack: ' + (slackAuth.ok ? `✅ OK (${slackAuth.user})` : '❌ NG: ' + slackAuth.error));
-
-  const dmId = openDmChannel_(slackToken, SLACK_USER_DM);
-  Logger.log(`DM Channel: ${dmId ? '✅ ' + dmId : '❌ 取得失敗（im:write スコープを確認）'}`);
-
-  const msgs = fetchTodaySlackMessages_(slackToken);
-  Logger.log(`本日のSlackメッセージ: ${msgs.length}件`);
-
-  Logger.log('Slackへ送信します...');
+  Logger.log('議事録抽出を実行します（Slack通知なし）...');
   runDailyTaskReport();
   Logger.log('✅ 完了');
 }
