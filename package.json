@@ -1,0 +1,20 @@
+{
+  "name": "workspace-gas-tooling",
+  "private": true,
+  "description": "Lint and format Google Apps Script (.gs) sources",
+  "scripts": {
+    "gas:globals": "node scripts/generate-gas-globals.mjs",
+    "lint": "npm run gas:globals && eslint --no-warn-ignored \"*.gs\"",
+    "lint:fix": "npm run gas:globals && eslint --no-warn-ignored --fix \"*.gs\"",
+    "format": "prettier --write \"*.gs\"",
+    "format:check": "prettier --check \"*.gs\"",
+    "check": "npm run format:check && npm run lint"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-googleappsscript": "^1.0.5",
+    "prettier": "^3.6.2"
+  }
+}

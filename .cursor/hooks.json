@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": ".cursor/hooks/lint-gs-after-edit.sh",
+        "matcher": "Write|TabWrite|StrReplace|EditNotebook"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/lint-gs-on-stop.sh",
+        "loop_limit": 2
+      }
+    ]
+  }
+}

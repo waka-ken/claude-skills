@@ -38,9 +38,8 @@
 // 共通定数
 // ─────────────────────────────────────────────
 const NOTION_VERSION = '2022-06-28';
-const SLACK_CHANNEL  = 'C0APWTARQJV';  // #all-jackson-office-ワークスペース
-const SLACK_USER_DM  = 'U0AP2H08DE3';  // wakaken.business へのDM
-
+const SLACK_CHANNEL = 'C0APWTARQJV'; // #all-jackson-office-ワークスペース
+const SLACK_USER_DM = 'U0AP2H08DE3'; // wakaken.business へのDM
 
 // ─────────────────────────────────────────────
 // Slack通知（DM のみに送信）
@@ -63,10 +62,10 @@ function postSlackDm_(token, message, opt) {
   if (opt?.blocks) payload.blocks = opt.blocks;
 
   const res = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
-    method:             'POST',
-    headers:            { Authorization: `Bearer ${token}` },
-    contentType:        'application/json',
-    payload:            JSON.stringify(payload),
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
   const raw = JSON.parse(res.getContentText() || '{}');
@@ -93,14 +92,13 @@ function openSlackModal_(token, triggerId, view) {
   return JSON.parse(res.getContentText() || '{}');
 }
 
-
 // ─────────────────────────────────────────────
 // Notion APIヘルパー
 // ─────────────────────────────────────────────
 function notionGet_(token, url) {
   const res = UrlFetchApp.fetch(url, {
-    method:             'GET',
-    headers:            { Authorization: `Bearer ${token}`, 'Notion-Version': NOTION_VERSION },
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}`, 'Notion-Version': NOTION_VERSION },
     muteHttpExceptions: true,
   });
   return JSON.parse(res.getContentText());
@@ -108,9 +106,13 @@ function notionGet_(token, url) {
 
 function notionPost_(token, url, payload) {
   const res = UrlFetchApp.fetch(url, {
-    method:             'POST',
-    headers:            { Authorization: `Bearer ${token}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' },
-    payload:            JSON.stringify(payload),
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Notion-Version': NOTION_VERSION,
+      'Content-Type': 'application/json',
+    },
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
   return JSON.parse(res.getContentText());
@@ -118,9 +120,13 @@ function notionPost_(token, url, payload) {
 
 function notionPatch_(token, url, payload) {
   const res = UrlFetchApp.fetch(url, {
-    method:             'PATCH',
-    headers:            { Authorization: `Bearer ${token}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' },
-    payload:            JSON.stringify(payload),
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Notion-Version': NOTION_VERSION,
+      'Content-Type': 'application/json',
+    },
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
   return JSON.parse(res.getContentText());

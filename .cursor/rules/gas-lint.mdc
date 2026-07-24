@@ -1,0 +1,45 @@
+---
+description: Google Apps Script (.gs) 編集時は必ず lint/format を通す
+globs: "**/*.gs"
+alwaysApply: false
+---
+
+# Google Apps Script (.gs) 品質チェック
+
+このリポジトリの `*.gs` は Google Apps Script（V8）向けです。モジュールは使えません（全 `.gs` が同一グローバル）。
+
+## 必須ワークフロー
+
+`.gs` を追加・修正したら、完了前に必ず実行する:
+
+```bash
+npm run check
+```
+
+問題があれば:
+
+```bash
+npm run format
+npm run lint:fix
+```
+
+それでも残る `error` は手で直す。`warn` も可能な限り解消する。
+
+## よくある実行時エラーの予防
+
+- 未定義参照（`no-undef`）: `common.gs` のヘルパー名のtypo、欠けた定数
+- 予期しない改行結合（`no-unexpected-multiline`）: return / メソッド連鎖の改行
+- 重複キー・到達不能コード・`typeof` ミス
+- テンプレートリテラルやオブジェクト末尾カンマの崩れ（Prettier に任せる）
+
+## スタイル
+
+- Prettier 設定（`.prettierrc.json`）に従う。手動で揃えない
+- `sourceType` は script（`import` / `export` は使わない）
+- 共有ヘルパーは `common.gs`、ファイル内専用は末尾 `_` の慣例を維持
+
+## フック
+
+編集後は `.cursor/hooks/lint-gs-after-edit.sh` が format + lint する。
+stop 時は `npm run check` 相当で残件があれば follow-up する。
+フック出力の lint 指摘は無視せず修正する。

@@ -20,28 +20,29 @@
 // ─────────────────────────────────────────────
 const MORNING_TASKS_DB_ID = '380db617-4b67-80a9-bdc4-cad9411d207c'; // [DB] オールタスク管理
 
-
 // ─────────────────────────────────────────────
 // メインエントリーポイント（平日7:00 JSTに実行）
 // ─────────────────────────────────────────────
 function sendMorningTasks() {
-  const props       = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getScriptProperties();
   const notionToken = props.getProperty('NOTION_TOKEN');
-  const slackToken  = props.getProperty('SLACK_TOKEN');
+  const slackToken = props.getProperty('SLACK_TOKEN');
 
-  const today    = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd');
+  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd');
   const todayIso = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
 
   try {
-    const tasks   = fetchIncompleteTasks_(notionToken);
+    const tasks = fetchIncompleteTasks_(notionToken);
     const message = formatMessage_(tasks, today, todayIso);
     notifySlack_(slackToken, message);
   } catch (e) {
-    notifySlack_(slackToken, `⚠️ 朝のタスク通知でエラーが発生しました（${today}）\nエラー内容: ${e.message}`);
+    notifySlack_(
+      slackToken,
+      `⚠️ 朝のタスク通知でエラーが発生しました（${today}）\nエラー内容: ${e.message}`
+    );
     throw e;
   }
 }
-
 
 // ─────────────────────────────────────────────
 // NOTION: 未完了タスクを取得
@@ -49,7 +50,7 @@ function sendMorningTasks() {
 function fetchIncompleteTasks_(token) {
   const url = `https://api.notion.com/v1/databases/${MORNING_TASKS_DB_ID}/query`;
 
-  const res   = notionPost_(token, url, {
+  const res = notionPost_(token, url, {
     filter: {
       or: [
         { property: 'タグ', status: { equals: '未着手' } },
@@ -57,8 +58,8 @@ function fetchIncompleteTasks_(token) {
       ],
     },
     sorts: [
-      { property: 'タグ',  direction: 'ascending' },  // 進行中→未着手
-      { property: '期間',  direction: 'ascending' },   // 期限が近い順
+      { property: 'タグ', direction: 'ascending' }, // 進行中→未着手
+      { property: '期間', direction: 'ascending' }, // 期限が近い順
     ],
     page_size: 30,
   });
@@ -67,12 +68,12 @@ function fetchIncompleteTasks_(token) {
     const props = page.properties;
 
     const titleProp = Object.values(props).find(p => p.type === 'title');
-    const title     = titleProp?.title?.map(t => t.plain_text).join('') || '(無題)';
+    const title = titleProp?.title?.map(t => t.plain_text).join('') || '(無題)';
 
     const statusProp = props['タグ'];
-    const status     = statusProp?.status?.name || statusProp?.select?.name || '';
+    const status = statusProp?.status?.name || statusProp?.select?.name || '';
 
-    const dueDate  = props['期間']?.date?.start || null;
+    const dueDate = props['期間']?.date?.start || null;
     const priority = props['優先度']?.select?.name || null;
 
     // プロジェクトリレーションのID（複数ある場合は最初の1件を使用）
@@ -86,19 +87,19 @@ function fetchIncompleteTasks_(token) {
   for (const task of tasks) {
     for (const id of task.projectIds) {
       if (!projectNameCache[id]) {
-        const page      = notionGet_(token, `https://api.notion.com/v1/pages/${id}`);
+        const page = notionGet_(token, `https://api.notion.com/v1/pages/${id}`);
         const titleProp = Object.values(page.properties || {}).find(p => p.type === 'title');
         projectNameCache[id] = titleProp?.title?.map(t => t.plain_text).join('') || '(名称不明)';
       }
     }
-    task.projectName = task.projectIds.length > 0
-      ? task.projectIds.map(id => projectNameCache[id]).join(' / ')
-      : 'その他';
+    task.projectName =
+      task.projectIds.length > 0
+        ? task.projectIds.map(id => projectNameCache[id]).join(' / ')
+        : 'その他';
   }
 
   return tasks;
 }
-
 
 // ─────────────────────────────────────────────
 // タスクリストをSlack向けメッセージに整形
@@ -126,10 +127,17 @@ function formatMessage_(tasks, today, todayIso) {
   for (const projectName of sortedKeys) {
     lines.push(`*【${projectName}】*`);
     for (const task of grouped[projectName]) {
-      const statusEmoji   = task.status === '進行中' ? '🔄' : '📋';
-      const priorityEmoji = task.priority === '高' ? ' 🔴' : task.priority === '中' ? ' 🟡' : task.priority === '低' ? ' 🟢' : '';
-      const overdueEmoji  = task.dueDate && task.dueDate <= todayIso ? ' ⚠️' : '';
-      const dueLabel      = task.dueDate ? ` (期限: ${task.dueDate})` : '';
+      const statusEmoji = task.status === '進行中' ? '🔄' : '📋';
+      const priorityEmoji =
+        task.priority === '高'
+          ? ' 🔴'
+          : task.priority === '中'
+            ? ' 🟡'
+            : task.priority === '低'
+              ? ' 🟢'
+              : '';
+      const overdueEmoji = task.dueDate && task.dueDate <= todayIso ? ' ⚠️' : '';
+      const dueLabel = task.dueDate ? ` (期限: ${task.dueDate})` : '';
       lines.push(`　${statusEmoji}${priorityEmoji}${overdueEmoji} ${task.title}${dueLabel}`);
     }
     lines.push('');
@@ -138,7 +146,6 @@ function formatMessage_(tasks, today, todayIso) {
   lines.push(`📌 合計 ${tasks.length}件のタスクが残っています。良い一日を！`);
   return lines.join('\n');
 }
-
 
 // ─────────────────────────────────────────────
 // タイムトリガー設定（一度だけ手動実行）
@@ -167,24 +174,34 @@ function setupMorningTrigger() {
   Logger.log('✅ 朝タスク通知トリガーを設定しました（平日 07:00 JST）');
 }
 
-
 // ─────────────────────────────────────────────
 // 動作テスト
 // ─────────────────────────────────────────────
 function testMorningRun() {
-  const props       = PropertiesService.getScriptProperties();
+  const props = PropertiesService.getScriptProperties();
   const notionToken = props.getProperty('NOTION_TOKEN');
-  const slackToken  = props.getProperty('SLACK_TOKEN');
+  const slackToken = props.getProperty('SLACK_TOKEN');
 
-  const notionRes = notionPost_(notionToken, `https://api.notion.com/v1/databases/${MORNING_TASKS_DB_ID}/query`, { page_size: 1 });
-  Logger.log('Notion: ' + (notionRes.object === 'list' ? `✅ OK（${notionRes.results?.length}件取得）` : '❌ NG: ' + JSON.stringify(notionRes)));
+  const notionRes = notionPost_(
+    notionToken,
+    `https://api.notion.com/v1/databases/${MORNING_TASKS_DB_ID}/query`,
+    { page_size: 1 }
+  );
+  Logger.log(
+    'Notion: ' +
+      (notionRes.object === 'list'
+        ? `✅ OK（${notionRes.results?.length}件取得）`
+        : '❌ NG: ' + JSON.stringify(notionRes))
+  );
 
-  const slackRes  = UrlFetchApp.fetch('https://slack.com/api/auth.test', {
+  const slackRes = UrlFetchApp.fetch('https://slack.com/api/auth.test', {
     headers: { Authorization: `Bearer ${slackToken}` },
     muteHttpExceptions: true,
   });
   const slackData = JSON.parse(slackRes.getContentText());
-  Logger.log('Slack: ' + (slackData.ok ? `✅ OK (${slackData.user})` : '❌ NG: ' + slackData.error));
+  Logger.log(
+    'Slack: ' + (slackData.ok ? `✅ OK (${slackData.user})` : '❌ NG: ' + slackData.error)
+  );
 
   // 実際にメッセージを送信して確認
   Logger.log('実際にSlackへ送信します...');

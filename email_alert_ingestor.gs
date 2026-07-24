@@ -38,8 +38,8 @@
 /** @type {string} 監視対象メール。空のままなら EMAIL_MONITOR_ADDRESS プロパティ必須 */
 var EMAIL_MONITOR_ADDRESS = '';
 
-const EMAIL_TASKS_DB_ID       = '380db617-4b67-80a9-bdc4-cad9411d207c'; // [DB] オールタスク管理
-const EMAIL_PROJECTS_DB_ID    = '380db617-4b67-80ab-bc76-c2287da389ee'; // [DB] プロジェクト管理
+const EMAIL_TASKS_DB_ID = '380db617-4b67-80a9-bdc4-cad9411d207c'; // [DB] オールタスク管理
+const EMAIL_PROJECTS_DB_ID = '380db617-4b67-80ab-bc76-c2287da389ee'; // [DB] プロジェクト管理
 /** どのプロジェクトにも当てはまらない／自信が低いときのデフォルト */
 const EMAIL_DEFAULT_PROJECT_NAME = 'Jackson office project';
 /**
@@ -47,19 +47,18 @@ const EMAIL_DEFAULT_PROJECT_NAME = 'Jackson office project';
  * スクリプトプロパティ EMAIL_LOOKBACK_AFTER（YYYY-MM-DD）があればそちら優先。
  */
 const EMAIL_LOOKBACK_AFTER_DEFAULT = '2026-07-22';
-const EMAIL_DONE_LABEL       = 'email-ingestor/done';
-const EMAIL_POLL_MINUTES     = 15;
-const EMAIL_MAX_PER_RUN      = 8;
-const EMAIL_BODY_MAX_CHARS   = 6000;
-const EMAIL_PROCESSED_KEY    = 'EMAIL_PROCESSED_IDS_JSON';
-const EMAIL_PROCESSED_MAX    = 400;
-const EMAIL_DENYLIST_KEY     = 'EMAIL_DENYLIST_JSON';
+const EMAIL_DONE_LABEL = 'email-ingestor/done';
+const EMAIL_POLL_MINUTES = 15;
+const EMAIL_MAX_PER_RUN = 8;
+const EMAIL_BODY_MAX_CHARS = 6000;
+const EMAIL_PROCESSED_KEY = 'EMAIL_PROCESSED_IDS_JSON';
+const EMAIL_PROCESSED_MAX = 400;
+const EMAIL_DENYLIST_KEY = 'EMAIL_DENYLIST_JSON';
 const EMAIL_SLACK_THREAD_KEY = 'EMAIL_SLACK_THREAD_MAP_JSON';
 const EMAIL_SLACK_THREAD_MAX = 120;
-const EMAIL_SLACK_EVENT_KEY  = 'EMAIL_SLACK_EVENT_IDS_JSON';
-const EMAIL_SLACK_EVENT_MAX  = 80;
-const EMAIL_GEMINI_MODEL     = 'gemini-2.5-flash';
-
+const EMAIL_SLACK_EVENT_KEY = 'EMAIL_SLACK_EVENT_IDS_JSON';
+const EMAIL_SLACK_EVENT_MAX = 80;
+const EMAIL_GEMINI_MODEL = 'gemini-2.5-flash';
 
 // ─────────────────────────────────────────────
 // メイン（時間トリガー）
@@ -78,10 +77,10 @@ function pollEmailAlerts() {
       return;
     }
 
-    const notionToken  = props.getProperty('NOTION_TOKEN');
+    const notionToken = props.getProperty('NOTION_TOKEN');
     const geminiApiKey = props.getProperty('GEMINI_API_KEY');
-    const slackToken   = props.getProperty('SLACK_TOKEN');
-    const monitorAddr  = resolveMonitorAddress_();
+    const slackToken = props.getProperty('SLACK_TOKEN');
+    const monitorAddr = resolveMonitorAddress_();
 
     if (!notionToken || !geminiApiKey || !slackToken) {
       throw new Error('NOTION_TOKEN / GEMINI_API_KEY / SLACK_TOKEN のいずれかが未設定です');
@@ -89,21 +88,21 @@ function pollEmailAlerts() {
     assertMonitorMailbox_(monitorAddr);
 
     const doneLabel = getOrCreateLabel_(EMAIL_DONE_LABEL);
-    const threads   = fetchCandidateThreads_(monitorAddr, doneLabel);
+    const threads = fetchCandidateThreads_(monitorAddr, doneLabel);
     if (threads.length === 0) {
       Logger.log('pollEmailAlerts: 新規候補なし');
       return;
     }
 
     // 毎回 Notion から現行プロジェクトを取得（ハードコードしない）
-    const projects     = fetchActiveProjects_(notionToken);
-    const denylist     = loadDenylist_();
+    const projects = fetchActiveProjects_(notionToken);
+    const denylist = loadDenylist_();
     const processedIds = loadProcessedIds_();
-    const summary      = { created: 0, skipped: 0, ignored: 0, errors: 0 };
+    const summary = { created: 0, skipped: 0, ignored: 0, errors: 0 };
 
     for (const thread of threads) {
       const messages = thread.getMessages();
-      const message  = messages[messages.length - 1];
+      const message = messages[messages.length - 1];
       try {
         const result = processOneMessage_({
           message,
@@ -142,7 +141,6 @@ function pollEmailAlerts() {
   }
 }
 
-
 // ─────────────────────────────────────────────
 // 1通処理
 // ─────────────────────────────────────────────
@@ -159,8 +157,8 @@ function processOneMessage_({
   monitorAddr,
 }) {
   const messageId = String(message.getId());
-  const from      = String(message.getFrom() || '');
-  const subject   = safeSubject_(message);
+  const from = String(message.getFrom() || '');
+  const subject = safeSubject_(message);
 
   if (processedIds.indexOf(messageId) !== -1) {
     markThreadDone_(thread, doneLabel);
@@ -215,7 +213,8 @@ function processOneMessage_({
   });
 
   const pageUrl = page?.url || '(URL不明)';
-  const urgency = judgment.urgency === 'urgent' ? '🚨緊急' : (judgment.urgency === 'low' ? '低' : '通常');
+  const urgency =
+    judgment.urgency === 'urgent' ? '🚨緊急' : judgment.urgency === 'low' ? '低' : '通常';
   const projectLabel = formatProjectAssignLabel_(projectAssign);
   const textLines = [
     `📨 *必須対応メールを検知*（${urgency}）`,
@@ -297,11 +296,10 @@ function buildEmailAlertSlackBlocks_(textLines, pageUrl) {
   ];
 }
 
-
 // ─────────────────────────────────────────────
 // Gmail 取得
 // ─────────────────────────────────────────────
-function fetchCandidateThreads_(monitorAddr, doneLabel) {
+function fetchCandidateThreads_(monitorAddr, _doneLabel) {
   const lookback = resolveEmailLookbackAfter_();
   // Gmail after: は「その日の始まり以降」。年月はゼロ埋めなしでも可
   const afterToken = Utilities.formatDate(lookback, 'Asia/Tokyo', 'yyyy/M/d');
@@ -355,7 +353,6 @@ function safeSubject_(message) {
   }
 }
 
-
 // ─────────────────────────────────────────────
 // 監視アドレス
 // ─────────────────────────────────────────────
@@ -364,13 +361,15 @@ function safeSubject_(message) {
  * 無ければコード先頭の EMAIL_MONITOR_ADDRESS 定数を使う。
  */
 function resolveMonitorAddress_() {
-  const fromProps = (PropertiesService.getScriptProperties().getProperty('EMAIL_MONITOR_ADDRESS') || '').trim();
+  const fromProps = (
+    PropertiesService.getScriptProperties().getProperty('EMAIL_MONITOR_ADDRESS') || ''
+  ).trim();
   const fromConst = String(EMAIL_MONITOR_ADDRESS || '').trim();
   const addr = fromProps || fromConst;
   if (!addr) {
     throw new Error(
       '監視メールアドレスが未設定です。スクリプトプロパティ EMAIL_MONITOR_ADDRESS を設定するか、' +
-      'email_alert_ingestor.gs の EMAIL_MONITOR_ADDRESS に代入してください。'
+        'email_alert_ingestor.gs の EMAIL_MONITOR_ADDRESS に代入してください。'
     );
   }
   return addr.toLowerCase();
@@ -398,18 +397,23 @@ function resolveEmailLookbackAfter_() {
 
 function assertMonitorMailbox_(monitorAddr) {
   const effective = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
-  const aliases   = GmailApp.getAliases().map(function (a) { return String(a).toLowerCase(); });
-  const allowed   = [effective].concat(aliases);
+  const aliases = GmailApp.getAliases().map(function (a) {
+    return String(a).toLowerCase();
+  });
+  const allowed = [effective].concat(aliases);
 
   if (allowed.indexOf(monitorAddr) === -1) {
     throw new Error(
-      'EMAIL_MONITOR_ADDRESS (' + monitorAddr + ') は、この GAS 実行アカウントの' +
-      'メール / エイリアスではありません。実行ユーザー: ' + effective +
-      ' / エイリアス: ' + (aliases.join(', ') || '(なし)')
+      'EMAIL_MONITOR_ADDRESS (' +
+        monitorAddr +
+        ') は、この GAS 実行アカウントの' +
+        'メール / エイリアスではありません。実行ユーザー: ' +
+        effective +
+        ' / エイリアス: ' +
+        (aliases.join(', ') || '(なし)')
     );
   }
 }
-
 
 // ─────────────────────────────────────────────
 // denylist / 処理済み ID
@@ -418,7 +422,11 @@ function loadDenylist_() {
   const raw = PropertiesService.getScriptProperties().getProperty(EMAIL_DENYLIST_KEY) || '[]';
   try {
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.map(function (x) { return String(x).toLowerCase(); }) : [];
+    return Array.isArray(arr)
+      ? arr.map(function (x) {
+          return String(x).toLowerCase();
+        })
+      : [];
   } catch (_) {
     return [];
   }
@@ -434,7 +442,9 @@ function saveDenylist_(list) {
  *     addEmailDenylist('promo@example.com')
  */
 function addEmailDenylist(fromOrDomain) {
-  const value = String(fromOrDomain || '').trim().toLowerCase();
+  const value = String(fromOrDomain || '')
+    .trim()
+    .toLowerCase();
   if (!value) throw new Error('fromOrDomain が空です');
   const list = loadDenylist_();
   if (list.indexOf(value) === -1) {
@@ -476,7 +486,6 @@ function saveProcessedIds_(ids) {
   PropertiesService.getScriptProperties().setProperty(EMAIL_PROCESSED_KEY, JSON.stringify(trimmed));
 }
 
-
 // ─────────────────────────────────────────────
 // Notion プロジェクト一覧（差分は都度取得で吸収）
 // ─────────────────────────────────────────────
@@ -511,21 +520,30 @@ function fetchActiveProjects_(token) {
       const titleProp = Object.values(page.properties || {}).find(function (p) {
         return p.type === 'title';
       });
-      const name = (titleProp?.title || []).map(function (t) {
-        return t.plain_text || '';
-      }).join('').trim();
+      const name = (titleProp?.title || [])
+        .map(function (t) {
+          return t.plain_text || '';
+        })
+        .join('')
+        .trim();
       if (!name) return;
 
       const repoProp = page.properties?.['GitHubリポジトリ'];
       let repos = '';
       if (repoProp?.type === 'rich_text') {
-        repos = (repoProp.rich_text || []).map(function (t) {
-          return t.plain_text || '';
-        }).join('').trim();
+        repos = (repoProp.rich_text || [])
+          .map(function (t) {
+            return t.plain_text || '';
+          })
+          .join('')
+          .trim();
       } else if (repoProp?.type === 'title') {
-        repos = (repoProp.title || []).map(function (t) {
-          return t.plain_text || '';
-        }).join('').trim();
+        repos = (repoProp.title || [])
+          .map(function (t) {
+            return t.plain_text || '';
+          })
+          .join('')
+          .trim();
       }
 
       projects.push({ id: page.id, name: name, repos: repos });
@@ -534,7 +552,14 @@ function fetchActiveProjects_(token) {
     cursor = res.has_more ? res.next_cursor : undefined;
   } while (cursor);
 
-  Logger.log('有効プロジェクト: ' + projects.map(function (p) { return p.name; }).join(', '));
+  Logger.log(
+    '有効プロジェクト: ' +
+      projects
+        .map(function (p) {
+          return p.name;
+        })
+        .join(', ')
+  );
   return projects;
 }
 
@@ -603,17 +628,22 @@ function formatProjectAssignLabel_(projectAssign) {
   return projectAssign.project.name;
 }
 
-
 // ─────────────────────────────────────────────
 // Gemini 判定
 // ─────────────────────────────────────────────
-function classifyEmailWithGemini_(apiKey, { monitorAddr, from, subject, receivedIso, bodyText, projects }) {
-  const projectLines = (projects || []).length > 0
-    ? projects.map(function (p, i) {
-        const repoPart = p.repos ? ' | GitHub: ' + p.repos : '';
-        return (i + 1) + '. ' + p.name + repoPart;
-      }).join('\n')
-    : '(候補なし)';
+function classifyEmailWithGemini_(
+  apiKey,
+  { monitorAddr, from, subject, receivedIso, bodyText, projects }
+) {
+  const projectLines =
+    (projects || []).length > 0
+      ? projects
+          .map(function (p, i) {
+            const repoPart = p.repos ? ' | GitHub: ' + p.repos : '';
+            return i + 1 + '. ' + p.name + repoPart;
+          })
+          .join('\n')
+      : '(候補なし)';
 
   const prompt =
     'あなたは業務メールのトリアージ担当です。\n' +
@@ -624,12 +654,24 @@ function classifyEmailWithGemini_(apiKey, { monitorAddr, from, subject, received
     'また、次の Notion プロジェクト候補から最も関連が強いものを1つ選んでください。\n' +
     'メール文面・送信元・リポジトリ名・サービス名を根拠にしてください。\n' +
     '確信が持てない場合は project_name を null にしてください（無理に当てはめない）。\n\n' +
-    '【プロジェクト候補】\n' + projectLines + '\n\n' +
-    '監視メール: ' + monitorAddr + '\n' +
-    'From: ' + from + '\n' +
-    'Subject: ' + subject + '\n' +
-    'Received: ' + receivedIso + '\n\n' +
-    'Body:\n' + bodyText + '\n\n' +
+    '【プロジェクト候補】\n' +
+    projectLines +
+    '\n\n' +
+    '監視メール: ' +
+    monitorAddr +
+    '\n' +
+    'From: ' +
+    from +
+    '\n' +
+    'Subject: ' +
+    subject +
+    '\n' +
+    'Received: ' +
+    receivedIso +
+    '\n\n' +
+    'Body:\n' +
+    bodyText +
+    '\n\n' +
     '次の JSON オブジェクトだけを返してください（説明文禁止）:\n' +
     '{\n' +
     '  "category": "action_required" | "review" | "fyi" | "ignore" | "uncertain",\n' +
@@ -646,8 +688,11 @@ function classifyEmailWithGemini_(apiKey, { monitorAddr, from, subject, received
     '  "confidence": 0.0\n' +
     '}';
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-    EMAIL_GEMINI_MODEL + ':generateContent?key=' + apiKey;
+  const url =
+    'https://generativelanguage.googleapis.com/v1beta/models/' +
+    EMAIL_GEMINI_MODEL +
+    ':generateContent?key=' +
+    apiKey;
 
   const res = UrlFetchApp.fetch(url, {
     method: 'POST',
@@ -664,7 +709,7 @@ function classifyEmailWithGemini_(apiKey, { monitorAddr, from, subject, received
     muteHttpExceptions: true,
   });
 
-  const raw  = res.getContentText();
+  const raw = res.getContentText();
   const data = JSON.parse(raw);
   if (data.error) {
     throw new Error('Gemini APIエラー: ' + (data.error.message || JSON.stringify(data.error)));
@@ -696,7 +741,7 @@ function normalizeJudgment_(j, subject) {
   const allowedCat = { action_required: 1, review: 1, fyi: 1, ignore: 1, uncertain: 1 };
   const allowedUrg = { urgent: 1, normal: 1, low: 1 };
   const category = allowedCat[j.category] ? j.category : 'uncertain';
-  const urgency  = allowedUrg[j.urgency] ? j.urgency : 'normal';
+  const urgency = allowedUrg[j.urgency] ? j.urgency : 'normal';
   const confidence = typeof j.confidence === 'number' ? j.confidence : 0.5;
   const projectConfidence = typeof j.project_confidence === 'number' ? j.project_confidence : 0;
 
@@ -745,15 +790,17 @@ function fallbackJudgment_(subject) {
   };
 }
 
-
 // ─────────────────────────────────────────────
 // Notion 起票
 // ─────────────────────────────────────────────
-function createEmailTask_(token, { judgment, from, subject, receivedIso, messageId, monitorAddr, projectAssign }) {
+function createEmailTask_(
+  token,
+  { judgment, from, subject, receivedIso, messageId, monitorAddr, projectAssign }
+) {
   const title = judgment.title || subject || 'メール要確認';
   const properties = {
-    'プロジェクト名': { title: [{ text: { content: title.slice(0, 100) } }] },
-    'タグ': { status: { name: '未着手' } },
+    プロジェクト名: { title: [{ text: { content: title.slice(0, 100) } }] },
+    タグ: { status: { name: '未着手' } },
   };
 
   const project = projectAssign?.project;
@@ -765,13 +812,19 @@ function createEmailTask_(token, { judgment, from, subject, receivedIso, message
     properties['期間'] = { date: { start: String(judgment.due_date) } };
   }
 
-  const steps = (judgment.action_steps || []).map(function (s, i) {
-    return (i + 1) + '. ' + s;
-  }).join('\n') || '1. 公式コンソールをブックマークから開いて確認する';
+  const steps =
+    (judgment.action_steps || [])
+      .map(function (s, i) {
+        return i + 1 + '. ' + s;
+      })
+      .join('\n') || '1. 公式コンソールをブックマークから開いて確認する';
 
-  const criteria = (judgment.done_criteria || []).map(function (s) {
-    return '- [ ] ' + s;
-  }).join('\n') || '- [ ] 対応完了または対象外と判断した';
+  const criteria =
+    (judgment.done_criteria || [])
+      .map(function (s) {
+        return '- [ ] ' + s;
+      })
+      .join('\n') || '- [ ] 対応完了または対象外と判断した';
 
   const projectLine = '分類プロジェクト: ' + formatProjectAssignLabel_(projectAssign);
 
@@ -792,7 +845,9 @@ function createEmailTask_(token, { judgment, from, subject, receivedIso, message
     emailHeading2_('完了条件'),
     emailParagraph_(criteria),
     emailHeading2_('参考'),
-    emailParagraph_('メール内リンクはフィッシングの可能性があるため、ブックマークから公式コンソールへ入ること。'),
+    emailParagraph_(
+      'メール内リンクはフィッシングの可能性があるため、ブックマークから公式コンソールへ入ること。'
+    ),
   ];
 
   const res = notionPost_(token, 'https://api.notion.com/v1/pages', {
@@ -819,10 +874,11 @@ function emailParagraph_(text) {
   return {
     object: 'block',
     type: 'paragraph',
-    paragraph: { rich_text: [{ type: 'text', text: { content: String(text || '').slice(0, 1900) } }] },
+    paragraph: {
+      rich_text: [{ type: 'text', text: { content: String(text || '').slice(0, 1900) } }],
+    },
   };
 }
-
 
 // ─────────────────────────────────────────────
 // Slack 操作（ボタン主系統 / スレッド返信は互換用）
@@ -841,22 +897,25 @@ function handleEmailAlertSlackInteraction_(payload) {
     const messageTs = payload.message?.ts || payload.container?.message_ts || '';
     const ctx = loadEmailSlackThreadContext_(messageTs);
     if (!ctx) {
-      postSlackDm_(slackToken, '⚠️ この通知のコンテキストが見つかりません。`testEmailAlertSlackButtons` を再実行してください。');
+      postSlackDm_(
+        slackToken,
+        '⚠️ この通知のコンテキストが見つかりません。`testEmailAlertSlackButtons` を再実行してください。'
+      );
       return null;
     }
 
     if (action.action_id === 'email_deny') {
       const target = extractEmailAddress_(ctx.from) || ctx.from;
       if (!target) {
-        postSlackDm_(slackToken, '⚠️ 無視対象の送信元を特定できませんでした。', { thread_ts: messageTs });
+        postSlackDm_(slackToken, '⚠️ 無視対象の送信元を特定できませんでした。', {
+          thread_ts: messageTs,
+        });
         return null;
       }
       addEmailDenylist(target);
-      postSlackDm_(
-        slackToken,
-        `✅ 送信元を denylist に追加しました: \`${target}\``,
-        { thread_ts: messageTs }
-      );
+      postSlackDm_(slackToken, `✅ 送信元を denylist に追加しました: \`${target}\``, {
+        thread_ts: messageTs,
+      });
       return null;
     }
 
@@ -946,17 +1005,15 @@ function handleEmailAlertSlackInteraction_(payload) {
         };
       }
 
-      const commentRes = notionCreateComment_(
-        notionToken,
-        notionPageId,
-        '💬 Slackより:\n' + text
-      );
+      const commentRes = notionCreateComment_(notionToken, notionPageId, '💬 Slackより:\n' + text);
       if (commentRes?.object === 'error') {
         Logger.log('Notion comment error: ' + JSON.stringify(commentRes));
         return {
           response_action: 'errors',
           errors: {
-            comment_block: 'Notion投稿失敗: ' + String(commentRes.message || commentRes.code || 'error').slice(0, 80),
+            comment_block:
+              'Notion投稿失敗: ' +
+              String(commentRes.message || commentRes.code || 'error').slice(0, 80),
           },
         };
       }
@@ -983,7 +1040,7 @@ function handleEmailAlertSlackEvent_(body, gasEvent) {
   verifySlackRequestIfConfigured_(gasEvent);
 
   const event = body.event || {};
-  const eventId = body.event_id || (event.client_msg_id || event.ts || '');
+  const eventId = body.event_id || event.client_msg_id || event.ts || '';
 
   if (event.type !== 'message') {
     return { ok: true, skipped: 'not_message' };
@@ -1104,7 +1161,10 @@ function markSlackEventProcessed_(eventId) {
   const ids = loadSlackEventIds_();
   ids.push(String(eventId));
   const trimmed = ids.slice(-EMAIL_SLACK_EVENT_MAX);
-  PropertiesService.getScriptProperties().setProperty(EMAIL_SLACK_EVENT_KEY, JSON.stringify(trimmed));
+  PropertiesService.getScriptProperties().setProperty(
+    EMAIL_SLACK_EVENT_KEY,
+    JSON.stringify(trimmed)
+  );
 }
 
 function loadSlackEventIds_() {
@@ -1124,16 +1184,21 @@ function verifySlackRequestIfConfigured_(gasEvent) {
   const secret = PropertiesService.getScriptProperties().getProperty('SLACK_SIGNING_SECRET');
   if (!secret) return;
 
-  const headers = gasEvent?.parameter || {};
   // Apps Script ではヘッダ取得が限られるため、可能な範囲で検証
-  const allHeaders = gasEvent?.postData ? null : null;
   // HtmlService/WebApp: e.parameter には来ない。一部環境では取得不可のため、
   // Signing Secret 設定時は「検証スキップ不可」ではなく警告ログに留める実装もあるが、
   // ここでは X-Slack-Signature が取れる場合のみ厳密検証する。
-  const signature = gasEvent?.parameter?.['x-slack-signature']
-    || (typeof gasEvent?.headers === 'object' ? (gasEvent.headers['X-Slack-Signature'] || gasEvent.headers['x-slack-signature']) : null);
-  const timestamp = gasEvent?.parameter?.['x-slack-request-timestamp']
-    || (typeof gasEvent?.headers === 'object' ? (gasEvent.headers['X-Slack-Request-Timestamp'] || gasEvent.headers['x-slack-request-timestamp']) : null);
+  const signature =
+    gasEvent?.parameter?.['x-slack-signature'] ||
+    (typeof gasEvent?.headers === 'object'
+      ? gasEvent.headers['X-Slack-Signature'] || gasEvent.headers['x-slack-signature']
+      : null);
+  const timestamp =
+    gasEvent?.parameter?.['x-slack-request-timestamp'] ||
+    (typeof gasEvent?.headers === 'object'
+      ? gasEvent.headers['X-Slack-Request-Timestamp'] ||
+        gasEvent.headers['x-slack-request-timestamp']
+      : null);
 
   if (!signature || !timestamp) {
     Logger.log('SLACK_SIGNING_SECRET 設定済みだが署名ヘッダを取得できないため検証スキップ');
@@ -1142,37 +1207,43 @@ function verifySlackRequestIfConfigured_(gasEvent) {
 
   const base = 'v0:' + timestamp + ':' + (gasEvent?.postData?.contents || '');
   const digest = Utilities.computeHmacSha256Signature(base, secret);
-  const hex = digest.map(function (b) {
-    const v = (b < 0 ? b + 256 : b).toString(16);
-    return v.length === 1 ? '0' + v : v;
-  }).join('');
+  const hex = digest
+    .map(function (b) {
+      const v = (b < 0 ? b + 256 : b).toString(16);
+      return v.length === 1 ? '0' + v : v;
+    })
+    .join('');
   const expected = 'v0=' + hex;
   if (expected !== signature) {
     throw new Error('invalid_slack_signature');
   }
 }
 
-
 // ─────────────────────────────────────────────
 // トリガー設定・テスト
 // ─────────────────────────────────────────────
 function setupEmailAlertTrigger() {
   ScriptApp.getProjectTriggers()
-    .filter(function (t) { return t.getHandlerFunction() === 'pollEmailAlerts'; })
-    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
+    .filter(function (t) {
+      return t.getHandlerFunction() === 'pollEmailAlerts';
+    })
+    .forEach(function (t) {
+      ScriptApp.deleteTrigger(t);
+    });
 
-  ScriptApp.newTrigger('pollEmailAlerts')
-    .timeBased()
-    .everyMinutes(EMAIL_POLL_MINUTES)
-    .create();
+  ScriptApp.newTrigger('pollEmailAlerts').timeBased().everyMinutes(EMAIL_POLL_MINUTES).create();
 
   Logger.log('pollEmailAlerts を ' + EMAIL_POLL_MINUTES + ' 分ごとに設定しました');
 }
 
 function removeEmailAlertTrigger() {
   ScriptApp.getProjectTriggers()
-    .filter(function (t) { return t.getHandlerFunction() === 'pollEmailAlerts'; })
-    .forEach(function (t) { ScriptApp.deleteTrigger(t); });
+    .filter(function (t) {
+      return t.getHandlerFunction() === 'pollEmailAlerts';
+    })
+    .forEach(function (t) {
+      ScriptApp.deleteTrigger(t);
+    });
   Logger.log('pollEmailAlerts トリガーを削除しました');
 }
 
@@ -1229,7 +1300,7 @@ function testEmailAlertSlackButtons() {
   }
 
   const taskPageId = created.id;
-  const pageUrl = created.url || ('https://www.notion.so/' + String(taskPageId).replace(/-/g, ''));
+  const pageUrl = created.url || 'https://www.notion.so/' + String(taskPageId).replace(/-/g, '');
   Logger.log('テスト用個別タスク: ' + pageUrl);
 
   const textLines = [
@@ -1259,6 +1330,8 @@ function testEmailAlertSlackButtons() {
     pageUrl: pageUrl,
   });
 
-  Logger.log('✅ テスト通知を送信しました。Slack の Notion リンクが個別タスクであることを確認してからコメントしてください。');
+  Logger.log(
+    '✅ テスト通知を送信しました。Slack の Notion リンクが個別タスクであることを確認してからコメントしてください。'
+  );
   Logger.log('taskPageId=' + taskPageId);
 }

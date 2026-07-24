@@ -21,8 +21,8 @@
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  */
 
-const DISPATCH_EVENT_TYPE   = 'notion-ai-task';
-const DISPATCH_TASKS_DB_ID  = '380db617-4b67-80a9-bdc4-cad9411d207c';
+const DISPATCH_EVENT_TYPE = 'notion-ai-task';
+const DISPATCH_TASKS_DB_ID = '380db617-4b67-80a9-bdc4-cad9411d207c';
 const DISPATCH_PROJECTS_DB_ID = '380db617-4b67-80ab-bc76-c2287da389ee';
 
 /**
@@ -62,12 +62,10 @@ function pollAiRequests() {
       const message = err?.message || String(err);
       try {
         markAiFailure_(notionToken, pageId, message);
-        notionCreateComment_(
-          notionToken,
-          pageId,
-          `⚠️ AI依頼の起動に失敗しました\n${message}`
-        );
-      } catch (_) { /* ignore */ }
+        notionCreateComment_(notionToken, pageId, `⚠️ AI依頼の起動に失敗しました\n${message}`);
+      } catch (_) {
+        /* ignore */
+      }
       if (slackToken) {
         notifySlack_(slackToken, `⚠️ AI Dispatch 失敗\n${title}\n${message}`);
       }
@@ -94,10 +92,7 @@ function setupAiDispatchPollTrigger() {
     .filter(t => t.getHandlerFunction() === 'pollAiRequests')
     .forEach(t => ScriptApp.deleteTrigger(t));
 
-  ScriptApp.newTrigger('pollAiRequests')
-    .timeBased()
-    .everyMinutes(5)
-    .create();
+  ScriptApp.newTrigger('pollAiRequests').timeBased().everyMinutes(5).create();
 
   Logger.log('✅ pollAiRequests を 5分ごとに設定しました（リポ選択肢も同期）');
 }
@@ -126,7 +121,7 @@ function syncGithubRepoSelectOptions() {
   // 注意: select options は「送った一覧が全量」になる（省略した選択肢は消える）
   const res = notionPatch_(token, `https://api.notion.com/v1/databases/${DISPATCH_TASKS_DB_ID}`, {
     properties: {
-      'GitHubリポジトリ': {
+      GitHubリポジトリ: {
         select: { options: options },
       },
     },
@@ -166,7 +161,7 @@ function doPost(e) {
   let body = {};
   try {
     body = JSON.parse(e?.postData?.contents || '{}');
-  } catch (err) {
+  } catch (_err) {
     return jsonResponse_(400, { ok: false, error: 'invalid_json' });
   }
 
@@ -184,10 +179,10 @@ function doPost(e) {
     }
   }
 
-  const notionToken    = props.getProperty('NOTION_TOKEN');
-  const githubPat      = props.getProperty('GITHUB_PAT');
-  const webhookSecret  = props.getProperty('WEBHOOK_SECRET');
-  const slackToken     = props.getProperty('SLACK_TOKEN');
+  const notionToken = props.getProperty('NOTION_TOKEN');
+  const githubPat = props.getProperty('GITHUB_PAT');
+  const webhookSecret = props.getProperty('WEBHOOK_SECRET');
+  const slackToken = props.getProperty('SLACK_TOKEN');
 
   if (!webhookSecret || body.secret !== webhookSecret) {
     return jsonResponse_(401, { ok: false, error: 'unauthorized' });
@@ -219,12 +214,10 @@ function doPost(e) {
     const message = err?.message || String(err);
     try {
       markAiFailure_(notionToken, pageId, message);
-      notionCreateComment_(
-        notionToken,
-        pageId,
-        `⚠️ AI依頼の起動に失敗しました\n${message}`
-      );
-    } catch (_) { /* ignore secondary failure */ }
+      notionCreateComment_(notionToken, pageId, `⚠️ AI依頼の起動に失敗しました\n${message}`);
+    } catch (_) {
+      /* ignore secondary failure */
+    }
 
     if (slackToken) {
       notifySlack_(slackToken, `⚠️ AI Dispatch 失敗\npage: ${pageId}\n${message}`);
@@ -244,17 +237,22 @@ function parseSlackFormPayload_(e) {
   }
   const contents = e?.postData?.contents || '';
   const type = e?.postData?.type || '';
-  if (type.indexOf('application/x-www-form-urlencoded') === -1 && contents.indexOf('payload=') === -1) {
+  if (
+    type.indexOf('application/x-www-form-urlencoded') === -1 &&
+    contents.indexOf('payload=') === -1
+  ) {
     return null;
   }
   const params = {};
-  String(contents).split('&').forEach(function (pair) {
-    const idx = pair.indexOf('=');
-    if (idx < 0) return;
-    const k = decodeURIComponent(pair.slice(0, idx).replace(/\+/g, ' '));
-    const v = decodeURIComponent(pair.slice(idx + 1).replace(/\+/g, ' '));
-    params[k] = v;
-  });
+  String(contents)
+    .split('&')
+    .forEach(function (pair) {
+      const idx = pair.indexOf('=');
+      if (idx < 0) return;
+      const k = decodeURIComponent(pair.slice(0, idx).replace(/\+/g, ' '));
+      const v = decodeURIComponent(pair.slice(idx + 1).replace(/\+/g, ' '));
+      params[k] = v;
+    });
   if (!params.payload) return null;
   try {
     return JSON.parse(params.payload);
@@ -361,17 +359,22 @@ function processAiDispatch_(notionToken, githubPat, pageId) {
     dispatch_id: dispatchId,
   };
 
-  const ghRes = githubRepositoryDispatch_(githubPat, repoFullName, DISPATCH_EVENT_TYPE, clientPayload);
+  const ghRes = githubRepositoryDispatch_(
+    githubPat,
+    repoFullName,
+    DISPATCH_EVENT_TYPE,
+    clientPayload
+  );
   if (ghRes.code < 200 || ghRes.code >= 300) {
     throw new Error(`GitHub Dispatch failed (${ghRes.code}): ${ghRes.body}`);
   }
 
   notionPatch_(notionToken, `https://api.notion.com/v1/pages/${pageId}`, {
     properties: {
-      'AIステータス': { select: { name: 'AI設計中' } },
+      AIステータス: { select: { name: 'AI設計中' } },
       'Dispatch ID': { rich_text: [{ type: 'text', text: { content: dispatchId } }] },
-      'AI最終エラー': { rich_text: [] },
-      'タグ': { status: { name: '進行中' } },
+      AI最終エラー: { rich_text: [] },
+      タグ: { status: { name: '進行中' } },
     },
   });
 
@@ -398,8 +401,8 @@ function markAiFailure_(notionToken, pageId, message) {
   const truncated = String(message).slice(0, 1900);
   notionPatch_(notionToken, `https://api.notion.com/v1/pages/${pageId}`, {
     properties: {
-      'AIステータス': { select: { name: 'AI失敗' } },
-      'AI最終エラー': { rich_text: [{ type: 'text', text: { content: truncated } }] },
+      AIステータス: { select: { name: 'AI失敗' } },
+      AI最終エラー: { rich_text: [{ type: 'text', text: { content: truncated } }] },
     },
   });
 }
@@ -423,7 +426,10 @@ function resolveGithubRepoFromTask_(taskPage, token, projectIds) {
 }
 
 function resolveGithubRepoFromProject_(token, projectPageId) {
-  const project = notionGet_(token, `https://api.notion.com/v1/pages/${normalizeNotionId_(projectPageId)}`);
+  const project = notionGet_(
+    token,
+    `https://api.notion.com/v1/pages/${normalizeNotionId_(projectPageId)}`
+  );
   return richTextPlain_(project.properties?.['GitHubリポジトリ']).trim();
 }
 
@@ -460,8 +466,9 @@ function fetchAndParseTaskBody_(token, pageId) {
   const lines = [];
   let cursor = undefined;
   do {
-    const url = `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`
-      + (cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : '');
+    const url =
+      `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100` +
+      (cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : '');
     const res = notionGet_(token, url);
     (res.results || []).forEach(block => {
       const text = blockPlainText_(block);
@@ -559,16 +566,13 @@ function normalizeNotionId_(id) {
   if (m) s = m[1];
   s = s.replace(/-/g, '');
   if (s.length !== 32) return s;
-  return s.replace(
-    /^(.{8})(.{4})(.{4})(.{4})(.{12})$/,
-    '$1-$2-$3-$4-$5'
-  );
+  return s.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
 }
 
 function jsonResponse_(_status, obj) {
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(
+    ContentService.MimeType.JSON
+  );
 }
 
 /**
@@ -578,9 +582,9 @@ function jsonResponse_(_status, obj) {
  */
 function slackAckResponse_(result) {
   if (result && result.response_action) {
-    return ContentService
-      .createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(
+      ContentService.MimeType.JSON
+    );
   }
   return ContentService.createTextOutput('');
 }

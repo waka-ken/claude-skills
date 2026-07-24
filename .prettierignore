@@ -1,0 +1,7 @@
+node_modules/
+.git/
+.claude/
+docs/
+scripts/
+.devcontainer/
+eslint.gas-globals.json
