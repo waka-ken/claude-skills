@@ -420,9 +420,8 @@ jobs:
           fi
 
           # タスクがドキュメント／調査記録専用か（タイトル/やること/完了条件から判定）
-          TASK_BLOB="${TASK_TITLE}
-${TASK_TODO}
-${TASK_DONE}"
+          # ※ YAML の | ブロック内で行頭インデントを崩さないこと（改行リテラルは printf を使う）
+          TASK_BLOB=$(printf '%s\n%s\n%s' "${TASK_TITLE}" "${TASK_TODO}" "${TASK_DONE}")
           DOCS_TASK=0
           if echo "$TASK_BLOB" | grep -Eqi 'README|ドキュメント|docs only|ドキュメント整理|共通節を追加|調査|洗い出し|現状確認|動作確認|investigation'; then
             DOCS_TASK=1
