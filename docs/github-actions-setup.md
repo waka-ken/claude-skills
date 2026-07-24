@@ -21,6 +21,8 @@
 
 `GITHUB_TOKEN` は Actions 既定で足りる（contents / pull-requests）。
 
+Phase2（`anthropics/claude-code-action`）は **`show_full_output: true` 必須**。オフだとツール呼び出しがログに残らず、失敗調査ができない。
+
 ## 2.1. リポジトリ設定（マージ後ブランチ削除）
 
 Settings → General → Pull Requests で **Automatically delete head branches** を ON にする。

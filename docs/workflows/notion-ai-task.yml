@@ -11,6 +11,7 @@
 #
 # 注意: CI は無人実行のため permission-mode は bypassPermissions を使う。
 #       （承認プロンプト待ちでターンを浪費させない）
+#       Phase2 は show_full_output: true 必須（実行内容を Actions ログに残す）
 
 name: Notion AI Task Pipeline
 
@@ -310,6 +311,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           base_branch: ${{ github.event.repository.default_branch }}
           branch_prefix: "ai/notion-"
+          # Phase2 のツール呼び出し・途中経過を Actions ログに残す（調査必須）
+          show_full_output: "true"
           prompt: |
             REPO: ${{ github.repository }}
             NOTION_PAGE_ID: ${{ env.NOTION_PAGE_ID }}
