@@ -416,11 +416,17 @@ function markAiFailure_(notionToken, pageId, message) {
  * そのまま API パスに使うと 404 になるため、必ず parse してから使う。
  */
 function parseGithubRepoList_(raw) {
+  const seen = {};
   return String(raw || '')
     .split(/[,，;\n]+/)
     .map(s => s.trim())
     .filter(Boolean)
-    .filter(s => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(s));
+    .filter(s => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(s))
+    .filter(s => {
+      if (seen[s]) return false;
+      seen[s] = true;
+      return true;
+    });
 }
 
 /**
@@ -434,11 +440,9 @@ function resolveGithubRepoFromTask_(taskPage, token, projectIds) {
   if (fromTask) {
     const taskRepos = parseGithubRepoList_(fromTask);
     if (taskRepos.length === 1) return taskRepos[0];
-    if (fromTask.includes('/')) {
-      throw new Error(
-        `タスクの GitHubリポジトリ が不正です: "${fromTask}"。owner/repo 形式で1つ選んでください`
-      );
-    }
+    throw new Error(
+      `タスクの GitHubリポジトリ が不正です: "${fromTask}"。owner/repo 形式で1つ選んでください`
+    );
   }
 
   if (projectIds && projectIds.length > 0) {
