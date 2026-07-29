@@ -46,6 +46,9 @@
 
 1. タスクの `GitHubリポジトリ`（select・プルダウン）
 2. 未設定なら、関連プロジェクトの `GitHubリポジトリ`（フォールバック）
+   - プロジェクト側はカンマ区切り複数可（例: `waka-ken/a, waka-ken/b`）
+   - **単一**ならそのままフォールバック
+   - **複数**ならタスク側の明示選択を必須（連結文字列をそのまま Dispatch すると GitHub 404 になる）
 3. どちらも無ければ `AI失敗`
 
 **選択肢の同期:** プロジェクトDBにリポを追加・変更したら、GAS で `syncGithubRepoSelectOptions()` を実行する（`setupAiDispatchPollTrigger` でも同期される）。

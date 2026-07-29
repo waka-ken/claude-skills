@@ -366,7 +366,7 @@ function processAiDispatch_(notionToken, githubPat, pageId) {
     clientPayload
   );
   if (ghRes.code < 200 || ghRes.code >= 300) {
-    throw new Error(`GitHub Dispatch failed (${ghRes.code}): ${ghRes.body}`);
+    throw new Error(`GitHub Dispatch failed (${ghRes.code}) for ${repoFullName}: ${ghRes.body}`);
   }
 
   notionPatch_(notionToken, `https://api.notion.com/v1/pages/${pageId}`, {
@@ -411,12 +411,35 @@ function markAiFailure_(notionToken, pageId, message) {
 // Notion: リポ解決 / 本文パース
 // ─────────────────────────────────────────────
 /**
- * 優先: タスクの GitHubリポジトリ（select）
- * フォールバック: 関連プロジェクトの GitHubリポジトリ（text）
+ * プロジェクト rich_text は「owner/repo」またはカンマ区切り複数を許容する。
+ * 例: "waka-ken/jackson-office-api, waka-ken/core-RAG"
+ * そのまま API パスに使うと 404 になるため、必ず parse してから使う。
+ */
+function parseGithubRepoList_(raw) {
+  return String(raw || '')
+    .split(/[,，;\n]+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .filter(s => /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(s));
+}
+
+/**
+ * 優先: タスクの GitHubリポジトリ（select・単一）
+ * フォールバック: 関連プロジェクトの GitHubリポジトリ（text・単一のみ）
+ * プロジェクトに複数リポがある場合はタスク側の明示選択を必須にする
+ * （複数を連結したまま Dispatch すると GitHub 404 になる）
  */
 function resolveGithubRepoFromTask_(taskPage, token, projectIds) {
   const fromTask = selectPropPlain_(taskPage.properties?.['GitHubリポジトリ']).trim();
-  if (fromTask) return fromTask;
+  if (fromTask) {
+    const taskRepos = parseGithubRepoList_(fromTask);
+    if (taskRepos.length === 1) return taskRepos[0];
+    if (fromTask.includes('/')) {
+      throw new Error(
+        `タスクの GitHubリポジトリ が不正です: "${fromTask}"。owner/repo 形式で1つ選んでください`
+      );
+    }
+  }
 
   if (projectIds && projectIds.length > 0) {
     const fromProject = resolveGithubRepoFromProject_(token, projectIds[0]);
@@ -430,7 +453,14 @@ function resolveGithubRepoFromProject_(token, projectPageId) {
     token,
     `https://api.notion.com/v1/pages/${normalizeNotionId_(projectPageId)}`
   );
-  return richTextPlain_(project.properties?.['GitHubリポジトリ']).trim();
+  const raw = richTextPlain_(project.properties?.['GitHubリポジトリ']).trim();
+  const repos = parseGithubRepoList_(raw);
+  if (repos.length === 0) return '';
+  if (repos.length === 1) return repos[0];
+  throw new Error(
+    `プロジェクトに複数の GitHubリポジトリがあります（${repos.join(', ')}）。` +
+      'タスクの「GitHubリポジトリ」で PR 先を1つ選んでから「AIに依頼」にしてください'
+  );
 }
 
 function collectProjectRepos_(token) {
@@ -446,8 +476,9 @@ function collectProjectRepos_(token) {
       throw new Error('プロジェクト取得失敗: ' + JSON.stringify(res));
     }
     (res.results || []).forEach(page => {
-      const repo = richTextPlain_(page.properties?.['GitHubリポジトリ']).trim();
-      if (repo && repo.includes('/')) set[repo] = true;
+      parseGithubRepoList_(richTextPlain_(page.properties?.['GitHubリポジトリ'])).forEach(repo => {
+        set[repo] = true;
+      });
     });
     cursor = res.has_more ? res.next_cursor : undefined;
   } while (cursor);
