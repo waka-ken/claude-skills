@@ -39,14 +39,24 @@ function pollAiRequests() {
     throw new Error('NOTION_TOKEN / GITHUB_PAT をスクリプトプロパティに設定してください');
   }
 
-  const pages = queryAiRequestPages_(notionToken);
+  // 古い順を先に通し、同趣旨の後続をスキップする
+  const pages = queryAiRequestPages_(notionToken)
+    .slice()
+    .sort((a, b) => String(a.created_time || '').localeCompare(String(b.created_time || '')));
+
+  const inFlight = collectInFlightFingerprints_(notionToken);
+  const batchAccepted = [];
+  const dedupeCtx = { batchAccepted: batchAccepted, inFlight: inFlight };
   const results = [];
 
   pages.forEach(page => {
     const pageId = page.id;
     const title = getTitleFromPage_(page);
     try {
-      const result = processAiDispatch_(notionToken, githubPat, pageId);
+      const result = processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx);
+      if (!result.skipped && result.fingerprint) {
+        batchAccepted.push(result.fingerprint);
+      }
       if (!result.skipped && slackToken) {
         notifySlack_(
           slackToken,
@@ -54,6 +64,14 @@ function pollAiRequests() {
             `タスク: ${title}\n` +
             `リポ: ${result.repository}\n` +
             `Dispatch ID: ${result.dispatch_id}\n` +
+            `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
+        );
+      } else if (result.skipped && result.reason === 'duplicate' && slackToken) {
+        notifySlack_(
+          slackToken,
+          `⏭️ AI依頼を重複スキップ\n` +
+            `タスク: ${title}\n` +
+            `理由: 類似タスクが実行中のため Dispatch しません\n` +
             `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
         );
       }
@@ -198,7 +216,11 @@ function doPost(e) {
   }
 
   try {
-    const result = processAiDispatch_(notionToken, githubPat, pageId);
+    const dedupeCtx = {
+      batchAccepted: [],
+      inFlight: collectInFlightFingerprints_(notionToken),
+    };
+    const result = processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx);
     if (!result.skipped && slackToken) {
       notifySlack_(
         slackToken,
@@ -206,6 +228,14 @@ function doPost(e) {
           `タスク: ${result.title}\n` +
           `リポ: ${result.repository}\n` +
           `Dispatch ID: ${result.dispatch_id}\n` +
+          `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
+      );
+    } else if (result.skipped && result.reason === 'duplicate' && slackToken) {
+      notifySlack_(
+        slackToken,
+        `⏭️ AI依頼を重複スキップ\n` +
+          `タスク: ${result.title}\n` +
+          `理由: 類似タスクが実行中のため Dispatch しません\n` +
           `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
       );
     }
@@ -315,7 +345,56 @@ function queryAiRequestPages_(token) {
   return pages;
 }
 
-function processAiDispatch_(notionToken, githubPat, pageId) {
+/**
+ * 実行中（設計・実装）タスクを取得（重複判定の比較相手）
+ */
+function queryInFlightAiPages_(token) {
+  const url = `https://api.notion.com/v1/databases/${DISPATCH_TASKS_DB_ID}/query`;
+  const pages = [];
+  let cursor = undefined;
+
+  do {
+    const payload = {
+      filter: {
+        or: [
+          { property: 'AIステータス', select: { equals: 'AI設計中' } },
+          { property: 'AIステータス', select: { equals: 'AI実装中' } },
+        ],
+      },
+      page_size: 50,
+    };
+    if (cursor) payload.start_cursor = cursor;
+
+    const res = notionPost_(token, url, payload);
+    if (res.object === 'error') {
+      throw new Error('Notion in-flight query failed: ' + JSON.stringify(res));
+    }
+    (res.results || []).forEach(p => pages.push(p));
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+
+  return pages;
+}
+
+function collectInFlightFingerprints_(token) {
+  const fingerprints = [];
+  queryInFlightAiPages_(token).forEach(page => {
+    try {
+      const fp = buildFingerprintFromPage_(token, page);
+      if (fp) fingerprints.push(fp);
+    } catch (err) {
+      Logger.log(
+        'in-flight fingerprint skip for ' + page.id + ': ' + (err?.message || String(err))
+      );
+    }
+  });
+  return fingerprints;
+}
+
+/**
+ * @param {object} [dedupeCtx] { batchAccepted: fingerprint[], inFlight: fingerprint[] }
+ */
+function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
   const page = notionGet_(notionToken, `https://api.notion.com/v1/pages/${pageId}`);
   if (page.object !== 'page') {
     throw new Error('Notion page not found: ' + JSON.stringify(page));
@@ -346,6 +425,22 @@ function processAiDispatch_(notionToken, githubPat, pageId) {
   }
 
   const bodyParsed = fetchAndParseTaskBody_(notionToken, pageId);
+  const fingerprint = buildAiTaskFingerprint_(title, bodyParsed.raw, repoFullName);
+  fingerprint.pageId = pageId;
+
+  const winner = findDuplicateAiTask_(fingerprint, dedupeCtx || {});
+  if (winner) {
+    markAiDuplicateSkip_(notionToken, pageId, winner);
+    return {
+      skipped: true,
+      reason: 'duplicate',
+      title,
+      repository: repoFullName,
+      duplicate_of: winner.pageId,
+      fingerprint: fingerprint,
+    };
+  }
+
   const dispatchId = Utilities.getUuid();
 
   const clientPayload = {
@@ -394,6 +489,7 @@ function processAiDispatch_(notionToken, githubPat, pageId) {
     repository: repoFullName,
     dispatch_id: dispatchId,
     event_type: DISPATCH_EVENT_TYPE,
+    fingerprint: fingerprint,
   };
 }
 
@@ -405,6 +501,124 @@ function markAiFailure_(notionToken, pageId, message) {
       AI最終エラー: { rich_text: [{ type: 'text', text: { content: truncated } }] },
     },
   });
+}
+
+function markAiDuplicateSkip_(notionToken, pageId, winner) {
+  const winnerTitle = winner?.title || '(無題)';
+  const winnerUrl = winner?.pageId
+    ? `https://www.notion.so/${String(winner.pageId).replace(/-/g, '')}`
+    : '(不明)';
+  const message =
+    `重複スキップ: 類似タスク「${winnerTitle}」が先に実行中のため AI 実行しません。` +
+    `参照: ${winnerUrl}`;
+  markAiFailure_(notionToken, pageId, message);
+  notionCreateComment_(notionToken, pageId, `⏭️ ${message}`);
+}
+
+// ─────────────────────────────────────────────
+// 重複判定（Dispatch 前）
+// ─────────────────────────────────────────────
+function buildFingerprintFromPage_(token, page) {
+  const title = getTitleFromPage_(page);
+  const projectIds = (page.properties?.['プロジェクト']?.relation || []).map(r => r.id);
+  let repoFullName = '';
+  try {
+    repoFullName = resolveGithubRepoFromTask_(page, token, projectIds);
+  } catch (_) {
+    // 複数リポなどで解決できない場合はタスク select のみ見る
+    repoFullName = selectPropPlain_(page.properties?.['GitHubリポジトリ']).trim();
+  }
+  if (!repoFullName || !repoFullName.includes('/')) return null;
+
+  const bodyParsed = fetchAndParseTaskBody_(token, page.id);
+  const fingerprint = buildAiTaskFingerprint_(title, bodyParsed.raw, repoFullName);
+  fingerprint.pageId = page.id;
+  return fingerprint;
+}
+
+function buildAiTaskFingerprint_(title, bodyRaw, repoFullName) {
+  return {
+    pageId: null,
+    title: String(title || ''),
+    repo: String(repoFullName || ''),
+    messageId: extractMessageIdFromBody_(bodyRaw),
+    tokens: normalizeTitleTokens_(title),
+  };
+}
+
+function extractMessageIdFromBody_(raw) {
+  const m = String(raw || '').match(/Message-ID:\s*(\S+)/i);
+  return m ? m[1].replace(/[<>]/g, '').trim().toLowerCase() : '';
+}
+
+function normalizeTitleTokens_(title) {
+  let s = String(title || '').toLowerCase();
+  const stopPhrases = [
+    'サポート終了',
+    'アップグレード',
+    'ランタイム',
+    '対応',
+    '調査',
+    '確認',
+    'eol',
+  ];
+  stopPhrases.forEach(w => {
+    s = s.split(w).join(' ');
+  });
+  // 助詞・短い記号を空白化（「等」は「冪等」などを壊すため含めない）
+  s = s.replace(/[のをにはがとでへや]/g, ' ');
+
+  const tokens = [];
+  const seen = {};
+  const re = /[a-z0-9][a-z0-9._-]*|[\u3040-\u30ff\u4e00-\u9fff]{2,}/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const t = m[0];
+    if (seen[t]) continue;
+    seen[t] = true;
+    tokens.push(t);
+  }
+  return tokens;
+}
+
+function titleSimilarity_(tokensA, tokensB) {
+  const a = tokensA || [];
+  const b = tokensB || [];
+  if (a.length === 0 || b.length === 0) {
+    return { jaccard: 0, intersection: 0 };
+  }
+  const setB = {};
+  b.forEach(t => {
+    setB[t] = true;
+  });
+  let intersection = 0;
+  a.forEach(t => {
+    if (setB[t]) intersection += 1;
+  });
+  const union = a.length + b.length - intersection;
+  return {
+    jaccard: union === 0 ? 0 : intersection / union,
+    intersection: intersection,
+  };
+}
+
+function fingerprintsMatch_(a, b) {
+  if (!a || !b) return false;
+  if (a.pageId && b.pageId && a.pageId === b.pageId) return false;
+  if (!a.repo || !b.repo || a.repo !== b.repo) return false;
+
+  if (a.messageId && b.messageId && a.messageId === b.messageId) return true;
+
+  const sim = titleSimilarity_(a.tokens, b.tokens);
+  return sim.intersection >= 2 && sim.jaccard >= 0.55;
+}
+
+function findDuplicateAiTask_(fingerprint, dedupeCtx) {
+  const candidates = [].concat(dedupeCtx.batchAccepted || []).concat(dedupeCtx.inFlight || []);
+  for (let i = 0; i < candidates.length; i++) {
+    if (fingerprintsMatch_(fingerprint, candidates[i])) return candidates[i];
+  }
+  return null;
 }
 
 // ─────────────────────────────────────────────

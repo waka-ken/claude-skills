@@ -91,9 +91,23 @@
 2. Notion でタスク取得（タイトル・AIステータス・プロジェクト relation）
 3. ブロック API で本文を取得し「背景 / やること / 完了条件」を抽出
 4. `GitHubリポジトリ` を解決（タスク優先 → プロジェクトフォールバック。未設定なら `AI失敗`）
-5. `POST /repos/{owner}/{repo}/dispatches`（`event_type: notion-ai-task`）
-6. 成功: `AIステータス=AI設計中`、`Dispatch ID` 記録、Notion コメント「受付」、Slack「開始」
-7. 失敗: `AI失敗` + `AI最終エラー` + Notion コメント + Slack
+5. **重複スキップ**: 同一リポで、実行中（`AI設計中` / `AI実装中`）または同ポーリング内で先に Dispatch したタスクと類似なら Dispatch せず `AI失敗`（`重複スキップ:` メッセージ）
+6. `POST /repos/{owner}/{repo}/dispatches`（`event_type: notion-ai-task`）
+7. 成功: `AIステータス=AI設計中`、`Dispatch ID` 記録、Notion コメント「受付」、Slack「開始」
+8. 失敗: `AI失敗` + `AI最終エラー` + Notion コメント + Slack
+
+### 重複スキップ規則（Dispatch 前）
+
+同趣旨タスクの同時実行を防ぐため、**GitHub Actions / Claude 起動前**に GAS で判定する。
+
+| 項目 | 内容 |
+|------|------|
+| 比較相手 | 同ポーリング内で先に通したタスク、および Notion 上の `AI設計中` / `AI実装中` |
+| 同バッチの優先 | `created_time` が古い方を採用 |
+| 一致条件 | 同一 `GitHubリポジトリ` かつ（本文の Message-ID 完全一致 **または** 正規化タイトルの Jaccard ≥ 0.55 かつ共通トークン ≥ 2） |
+| スキップ時 | `AIステータス=AI失敗`、`AI最終エラー` / コメントに `重複スキップ:` と勝者タスク URL |
+
+ポーリング（`pollAiRequests`）でも Webhook（`doPost`）でも同じ判定を通る。
 
 ### Repository Dispatch payload（client_payload）
 

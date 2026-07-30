@@ -83,4 +83,5 @@ Web App デプロイや Notion Automation は **不要**です。
 | リポ未設定 | タスク（優先）またはプロジェクトの `GitHubリポジトリ`（`owner/repo`） |
 | `GitHub Dispatch failed (404)` | プロジェクトにカンマ区切り複数リポがあり、タスク側未選択の可能性大。タスクで1つ選ぶ |
 | 複数リポエラー | タスクの「GitHubリポジトリ」で PR 先を明示選択 |
+| `重複スキップ:` | 同一リポで類似タイトル／同一 Message-ID のタスクが既に実行中（または同ポーリングで先に通った）。意図的なスキップ。勝者タスクの URL がコメントに付く |
 | Dispatch 失敗 | `GITHUB_PAT` の権限（`repo` / `workflow`） |
