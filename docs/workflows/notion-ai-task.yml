@@ -415,40 +415,59 @@ jobs:
           echo "Changed files:"
           echo "$PATHS"
 
+          # 「ブロッカー」「Generated with」は人が行う項目・フッタのためゲート判定から除外する。
+          # 否定文（「本番反映は範囲外」等）がデプロイ検知に誤反応するのを防ぐ。
+          # ※ YAML の | ブロック内で行頭インデントを崩さないこと（改行リテラルは printf を使う）
+          BODY_SCOPED=$(printf '%s\n' "$BODY" | awk '
+            BEGIN { skip=0 }
+            /^##[ \t]*ブロッカー/ { skip=1; next }
+            /^##[ \t]/ { skip=0 }
+            /^🤖/ { next }
+            skip==0 { print }
+          ')
+
+          # 肯定ヒットのみ残す（否定・非実施の行は除外）
+          affirmative_hits() {
+            local pattern="$1"
+            local text="$2"
+            printf '%s\n' "$text" | grep -Ei "$pattern" | grep -Eiv \
+              '実行していません|していません|未実施|範囲外|作業範囲外|対象外|含まれません|含まれない|禁止|しない|せず|不要|は本(タスク|PR)|完了条件に含まれ|デプロイは|デプロイを(し)?ない|反映(は|を).*(しない|不要|範囲|対象外|含まれ)' \
+              || true
+          }
+
           # docs / .ai_todo 以外の変更があるか
-          NON_DOC=$(echo "$PATHS" | grep -vE '^\.ai_todo\.md$|^docs/|\.md$' || true)
+          NON_DOC=$(printf '%s\n' "$PATHS" | grep -vE '^\.ai_todo\.md$|^docs/|\.md$' || true)
           ONLY_DOCS=0
           if [ -z "${NON_DOC}" ]; then
             ONLY_DOCS=1
           fi
 
-          # タスクがドキュメント／調査記録専用か（タイトル/やること/完了条件から判定）
-          # ※ YAML の | ブロック内で行頭インデントを崩さないこと（改行リテラルは printf を使う）
+          # ドキュメント／設計／調査専用か（タイトル/やること/完了条件から判定）
           TASK_BLOB=$(printf '%s\n%s\n%s' "${TASK_TITLE}" "${TASK_TODO}" "${TASK_DONE}")
           DOCS_TASK=0
-          if echo "$TASK_BLOB" | grep -Eqi 'README|ドキュメント|docs only|ドキュメント整理|共通節を追加|調査|洗い出し|現状確認|動作確認|investigation'; then
+          if printf '%s\n' "$TASK_BLOB" | grep -Eqi 'README|ドキュメント|docs only|ドキュメント整理|共通節を追加|調査|洗い出し|現状確認|動作確認|investigation|設計|設計書|design|仕様(書|整理)|方針|分析'; then
             DOCS_TASK=1
           fi
 
-          # 断念・代替完了を示す文言（環境不足で打ち切ったパターン）
+          # 断念・代替完了（環境不足で打ち切ったパターン）。ブロッカー節は除外済み
           ABANDON=0
-          if echo "$BODY" | grep -Eqi '実施できなかった|静的レビューで代替|認証情報.*なく|到達性がなく|再実行を推奨|サンドボックス.*なく|環境が無'; then
+          if [ -n "$(affirmative_hits '実施できなかった|静的レビューで代替|認証情報.*なく|到達性がなく|再実行を推奨|サンドボックス.*なく|環境が無' "$BODY_SCOPED")" ]; then
             ABANDON=1
           fi
 
           USED_DOCKER=0
-          if echo "$BODY" | grep -Eqi 'docker compose|docker-compose'; then
+          if printf '%s\n' "$BODY" | grep -Eqi 'docker compose|docker-compose'; then
             USED_DOCKER=1
           fi
 
+          # デプロイ実行の肯定記述のみ検知（「本番反映は範囲外」等は除外）
           DEPLOYED=0
-          if echo "$BODY" | grep -Eqi 'cdk deploy|cloudformation deploy|デプロイ完了|deployed to|本番反映'; then
+          if [ -n "$(affirmative_hits 'cdk deploy|cloudformation deploy|デプロイ完了|deployed to|本番反映|本番デプロイ|デプロイを実行|デプロイ実施' "$BODY_SCOPED")" ]; then
             DEPLOYED=1
           fi
 
           echo "ONLY_DOCS=${ONLY_DOCS} DOCS_TASK=${DOCS_TASK} ABANDON=${ABANDON} HAS_COMPOSE=${HAS_COMPOSE} USED_DOCKER=${USED_DOCKER} DEPLOYED=${DEPLOYED}"
 
-          # 典型悪い例: 環境不足などで断念
           if [ "$ABANDON" = "1" ]; then
             echo "::error::環境不足などで本対応を断念した記述があります。Docker Compose での実行・検証まで終わっていないため失敗扱いにします。"
             exit 1
@@ -531,19 +550,38 @@ jobs:
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+          PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           MSG="GitHub Actions implement failed. run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ -n "${PR_URL:-}" ]; then
+            MSG=$(printf '%s PR: %s' "$MSG" "$PR_URL")
+          fi
           if [ -n "${NOTION_TOKEN:-}" ] && [ -n "${NOTION_PAGE_ID:-}" ]; then
-            curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
-              -H "Authorization: Bearer ${NOTION_TOKEN}" \
-              -H "Notion-Version: 2022-06-28" \
-              -H "Content-Type: application/json" \
-              --data "$(jq -n --arg msg "$MSG" '{
-                properties: {
-                  "AIステータス": { select: { name: "AI失敗" } },
-                  "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
-                }
-              }')"
+            # ゲート失敗でも PR が作られていることがあるため、URL があれば必ず残す
+            if [ -n "${PR_URL:-}" ]; then
+              curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
+                -H "Authorization: Bearer ${NOTION_TOKEN}" \
+                -H "Notion-Version: 2022-06-28" \
+                -H "Content-Type: application/json" \
+                --data "$(jq -n --arg msg "$MSG" --arg url "$PR_URL" '{
+                  properties: {
+                    "AIステータス": { select: { name: "AI失敗" } },
+                    "PR URL": { url: $url },
+                    "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
+                  }
+                }')"
+            else
+              curl -sS -X PATCH "https://api.notion.com/v1/pages/${NOTION_PAGE_ID}" \
+                -H "Authorization: Bearer ${NOTION_TOKEN}" \
+                -H "Notion-Version: 2022-06-28" \
+                -H "Content-Type: application/json" \
+                --data "$(jq -n --arg msg "$MSG" '{
+                  properties: {
+                    "AIステータス": { select: { name: "AI失敗" } },
+                    "AI最終エラー": { rich_text: [{ type: "text", text: { content: $msg } }] }
+                  }
+                }')"
+            fi
             curl -sS -X POST "https://api.notion.com/v1/comments" \
               -H "Authorization: Bearer ${NOTION_TOKEN}" \
               -H "Notion-Version: 2022-06-28" \
