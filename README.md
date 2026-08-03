@@ -129,3 +129,14 @@ docs/mandatory-email-setup.md        # メール監視セットアップ
 - [GitHub Actions 導入](docs/github-actions-setup.md)
 - [必須対応メール → Notion 提案](docs/mandatory-email-to-notion-proposal.md)
 - [必須対応メール監視セットアップ](docs/mandatory-email-setup.md)
+- [GAS リモート反映（clasp）](docs/gas-clasp-setup.md)
+
+### GAS ソースの反映（コピペ不要）
+
+```bash
+cp .clasp.json.example .clasp.json   # scriptId を実プロジェクトに書き換え
+npm run gas:login                    # 初回のみ
+npm run gas:push                     # check → clasp push
+```
+
+詳細は [docs/gas-clasp-setup.md](docs/gas-clasp-setup.md)。

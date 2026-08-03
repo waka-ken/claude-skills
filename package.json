@@ -8,10 +8,16 @@
     "lint:fix": "npm run gas:globals && eslint --no-warn-ignored --fix \"*.gs\"",
     "format": "prettier --write \"*.gs\"",
     "format:check": "prettier --check \"*.gs\"",
-    "check": "npm run format:check && npm run lint"
+    "check": "npm run format:check && npm run lint",
+    "gas:login": "clasp login",
+    "gas:push": "npm run check && clasp push --force",
+    "gas:pull": "clasp pull",
+    "gas:open": "clasp open",
+    "gas:status": "clasp status"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@google/clasp": "^2.5.0",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-googleappsscript": "^1.0.5",

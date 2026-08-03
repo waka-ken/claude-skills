@@ -1,0 +1,28 @@
+# Keep only Apps Script sources + manifest
+**/**
+!appsscript.json
+!*.gs
+
+# Explicit excludes (belt and suspenders)
+.git/**
+.claude/**
+.cursor/**
+.devcontainer/**
+.vscode/**
+docs/**
+node_modules/**
+scripts/**
+*.md
+.env
+.env.*
+package.json
+package-lock.json
+eslint.config.mjs
+eslint.gas-globals.json
+.prettierrc.json
+.prettierignore
+.clasp.json.example
+.claspignore
+docker-compose.yml
+.gitignore
+.dockerignore

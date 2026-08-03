@@ -1,0 +1,14 @@
+{
+  "scriptId": "YOUR_SCRIPT_ID_HERE",
+  "rootDir": ".",
+  "scriptExtensions": [".gs", ".js"],
+  "htmlExtensions": [".html"],
+  "jsonExtensions": [".json"],
+  "filePushOrder": [
+    "common.gs",
+    "github_dispatch.gs",
+    "email_alert_ingestor.gs",
+    "morning_tasks.gs",
+    "notion_task_extractor.gs"
+  ]
+}
