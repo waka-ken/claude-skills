@@ -13,14 +13,14 @@
  *   2. スクリプトプロパティに GITHUB_PAT を設定
  *      （WEBHOOK_SECRET は doPost 利用時のみ必須）
  *   3. setupAiDispatchPollTrigger() を一度だけ手動実行
- *   4. Notion でタイトル末尾に（設計）または（実装）を付け、
- *      AIステータスを「AIに依頼」にする → 最大数分で Dispatch
+ *   4. Notion で AIステータスを「AIに依頼」にする → 最大数分で Dispatch
+ *      （タイトルに（設計）/（実装）は不要。Actions が内容判定する）
  *
  * 【契約（Actions 連携）】
  *   - event_type: notion-ai-task
- *   - client_payload.task_kind: "design" | "implement"（タイトルから解決）
+ *   - task_kind は送らない（Actions が AI 判定）。明示 override 時のみ任意
  *   - Dispatch ID は初回のみ新規発行、再依頼時は再利用（WIP resume）
- *   - 設計と実装は排他（1 dispatch で両方は走らない）
+ *   - 同一 Dispatch で設計→実装を連続実行し得る（ターン予算はジョブ分離）
  *
  * 【有料プラン向け: Web App / doPost】
  *   デプロイして Notion Automation から POST してもよい（任意）。
@@ -70,7 +70,6 @@ function pollAiRequests() {
           `🚀 AI依頼を開始\n` +
             `タスク: ${title}\n` +
             `リポ: ${result.repository}\n` +
-            `task_kind: ${result.task_kind}\n` +
             `Dispatch ID: ${result.dispatch_id}\n` +
             `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
         );
@@ -80,14 +79,6 @@ function pollAiRequests() {
           `⏭️ AI依頼を重複スキップ\n` +
             `タスク: ${title}\n` +
             `理由: 類似タスクが実行中のため Dispatch しません\n` +
-            `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
-        );
-      } else if (result.skipped && result.reason === 'task_kind_unresolved' && slackToken) {
-        notifySlack_(
-          slackToken,
-          `⚠️ AI依頼をスキップ（task_kind 不明）\n` +
-            `タスク: ${title}\n` +
-            `理由: タイトルに（設計）か（実装）がありません\n` +
             `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
         );
       }
@@ -243,7 +234,6 @@ function doPost(e) {
         `🚀 AI依頼を開始\n` +
           `タスク: ${result.title}\n` +
           `リポ: ${result.repository}\n` +
-          `task_kind: ${result.task_kind}\n` +
           `Dispatch ID: ${result.dispatch_id}\n` +
           `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
       );
@@ -253,14 +243,6 @@ function doPost(e) {
         `⏭️ AI依頼を重複スキップ\n` +
           `タスク: ${result.title}\n` +
           `理由: 類似タスクが実行中のため Dispatch しません\n` +
-          `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
-      );
-    } else if (result.skipped && result.reason === 'task_kind_unresolved' && slackToken) {
-      notifySlack_(
-        slackToken,
-        `⚠️ AI依頼をスキップ（task_kind 不明）\n` +
-          `タスク: ${result.title}\n` +
-          `理由: タイトルに（設計）か（実装）がありません\n` +
           `Notion: https://www.notion.so/${String(pageId).replace(/-/g, '')}`
       );
     }
@@ -341,65 +323,6 @@ function testPollAiRequests() {
   pollAiRequests();
 }
 
-/**
- * （任意）タイトルに（設計）/（実装）が無い「AIに依頼」ページを検知するヘルスチェック。
- * setupAiTaskKindHealthCheckTrigger() で週次実行できる。
- */
-function checkAiTaskKindTitles() {
-  const notionToken = PropertiesService.getScriptProperties().getProperty('NOTION_TOKEN');
-  const slackToken = PropertiesService.getScriptProperties().getProperty('SLACK_TOKEN');
-  if (!notionToken) throw new Error('NOTION_TOKEN 未設定');
-
-  const pages = queryAiRequestPages_(notionToken);
-  const missing = pages
-    .map(page => ({ id: page.id, title: getTitleFromPage_(page) }))
-    .filter(p => !resolveTaskKind_(p.title));
-
-  Logger.log(
-    JSON.stringify(
-      {
-        polled: pages.length,
-        missing_kind: missing.length,
-        pages: missing,
-      },
-      null,
-      2
-    )
-  );
-
-  if (missing.length > 0 && slackToken) {
-    const lines = missing
-      .slice(0, 10)
-      .map(p => `- ${p.title}\n  https://www.notion.so/${String(p.id).replace(/-/g, '')}`)
-      .join('\n');
-    notifySlack_(
-      slackToken,
-      `🩺 AI task_kind ヘルスチェック\n` +
-        `タイトルに（設計）/（実装）が無い「AIに依頼」: ${missing.length} 件\n` +
-        lines
-    );
-  }
-
-  return { polled: pages.length, missing_kind: missing.length, pages: missing };
-}
-
-/**
- * task_kind ヘルスチェックを週1回（月曜 10:00）に設定
- */
-function setupAiTaskKindHealthCheckTrigger() {
-  ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'checkAiTaskKindTitles')
-    .forEach(t => ScriptApp.deleteTrigger(t));
-
-  ScriptApp.newTrigger('checkAiTaskKindTitles')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(10)
-    .create();
-
-  Logger.log('✅ checkAiTaskKindTitles を月曜 10:00 に設定しました');
-}
-
 // ─────────────────────────────────────────────
 // 中核処理
 // ─────────────────────────────────────────────
@@ -476,17 +399,6 @@ function collectInFlightFingerprints_(token) {
 }
 
 /**
- * タイトルから task_kind（design | implement）を解決する。
- * 解決不能なら null（dispatch しない）。
- */
-function resolveTaskKind_(title) {
-  const s = String(title || '');
-  if (/（設計）|\(設計\)|【設計】/.test(s)) return 'design';
-  if (/（実装）|\(実装\)|【実装】/.test(s)) return 'implement';
-  return null;
-}
-
-/**
  * @param {object} [dedupeCtx] { batchAccepted: fingerprint[], inFlight: fingerprint[] }
  */
 function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
@@ -510,21 +422,6 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     };
   }
 
-  const taskKind = resolveTaskKind_(title);
-  if (!taskKind) {
-    const message =
-      'タイトルに（設計）か（実装）を付けてから「AIに依頼」してください。' +
-      '設計と実装は別タスクです（1タスクで両方は実行しません）。';
-    markAiFailure_(notionToken, pageId, message);
-    notionCreateComment_(notionToken, pageId, `⚠️ ${message}`);
-    return {
-      skipped: true,
-      reason: 'task_kind_unresolved',
-      title,
-      ai_status: 'AI失敗',
-    };
-  }
-
   const projectIds = (page.properties?.['プロジェクト']?.relation || []).map(r => r.id);
   // タスク単位のリポ指定を優先（同一プロジェクトでも PR 先が分かれるため）
   const repoFullName = resolveGithubRepoFromTask_(page, notionToken, projectIds);
@@ -535,7 +432,7 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
   }
 
   const bodyParsed = fetchAndParseTaskBody_(notionToken, pageId);
-  const fingerprint = buildAiTaskFingerprint_(title, bodyParsed.raw, repoFullName, taskKind);
+  const fingerprint = buildAiTaskFingerprint_(title, bodyParsed.raw, repoFullName);
   fingerprint.pageId = pageId;
 
   const winner = findDuplicateAiTask_(fingerprint, dedupeCtx || {});
@@ -546,7 +443,6 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
       reason: 'duplicate',
       title,
       repository: repoFullName,
-      task_kind: taskKind,
       duplicate_of: winner.pageId,
       fingerprint: fingerprint,
     };
@@ -571,11 +467,11 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     `🚀 AI依頼を受け付けました\n` +
       `リポジトリ: ${repoFullName}\n` +
       `Dispatch ID: ${dispatchId}\n` +
-      `task_kind: ${taskKind}\n` +
       `ステータス: AI設計中\n` +
-      `次の工程: Actions が design XOR implement を実行 → Draft PR`
+      `次の工程: Actions が内容判定 → 必要なら設計 → 必要なら実装 → Draft PR`
   );
 
+  // task_kind は送らない（Actions が AI 判定）。明示 override が必要ならここに追加する。
   const clientPayload = {
     notion_page_id: pageId,
     title: title,
@@ -585,7 +481,6 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     body_markdown: bodyParsed.raw,
     repository: repoFullName,
     dispatch_id: dispatchId,
-    task_kind: taskKind,
   };
 
   const ghRes = githubRepositoryDispatch_(
@@ -603,7 +498,6 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     title,
     repository: repoFullName,
     dispatch_id: dispatchId,
-    task_kind: taskKind,
     event_type: DISPATCH_EVENT_TYPE,
     fingerprint: fingerprint,
   };
@@ -636,7 +530,6 @@ function markAiDuplicateSkip_(notionToken, pageId, winner) {
 // ─────────────────────────────────────────────
 function buildFingerprintFromPage_(token, page) {
   const title = getTitleFromPage_(page);
-  const taskKind = resolveTaskKind_(title);
   const projectIds = (page.properties?.['プロジェクト']?.relation || []).map(r => r.id);
   let repoFullName = '';
   try {
@@ -648,17 +541,16 @@ function buildFingerprintFromPage_(token, page) {
   if (!repoFullName || !repoFullName.includes('/')) return null;
 
   const bodyParsed = fetchAndParseTaskBody_(token, page.id);
-  const fingerprint = buildAiTaskFingerprint_(title, bodyParsed.raw, repoFullName, taskKind);
+  const fingerprint = buildAiTaskFingerprint_(title, bodyParsed.raw, repoFullName);
   fingerprint.pageId = page.id;
   return fingerprint;
 }
 
-function buildAiTaskFingerprint_(title, bodyRaw, repoFullName, taskKind) {
+function buildAiTaskFingerprint_(title, bodyRaw, repoFullName) {
   return {
     pageId: null,
     title: String(title || ''),
     repo: String(repoFullName || ''),
-    taskKind: taskKind || null,
     messageId: extractMessageIdFromBody_(bodyRaw),
     tokens: normalizeTitleTokens_(title),
   };
@@ -724,8 +616,6 @@ function fingerprintsMatch_(a, b) {
   if (!a || !b) return false;
   if (a.pageId && b.pageId && a.pageId === b.pageId) return false;
   if (!a.repo || !b.repo || a.repo !== b.repo) return false;
-  // 設計と実装は別ジョブ（同趣旨タイトルでも重複扱いにしない）
-  if (a.taskKind && b.taskKind && a.taskKind !== b.taskKind) return false;
 
   if (a.messageId && b.messageId && a.messageId === b.messageId) return true;
 
