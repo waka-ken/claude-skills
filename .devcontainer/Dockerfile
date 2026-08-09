@@ -42,6 +42,15 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 # Cursor ターミナル等で PATH が短縮される場合でも claude を使えるようにする
 USER root
 RUN ln -sf /usr/local/share/npm-global/bin/claude /usr/local/bin/claude
+
+# Cursor / VS Code 拡張機能をイメージに同梱（起動ごとの再インストールを避ける）
+# Git Graph / Claude Code
+ARG TARGETARCH
+COPY .devcontainer/install-extensions.sh /tmp/install-extensions.sh
+RUN chmod +x /tmp/install-extensions.sh \
+    && /tmp/install-extensions.sh "${TARGETARCH}" \
+    && rm -f /tmp/install-extensions.sh
+
 USER node
 
 CMD ["bash"]

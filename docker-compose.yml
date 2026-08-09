@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
+      # 拡張機能 (Git Graph / Claude Code) は Dockerfile ビルド時に同梱される
     image: claude-skills-dev:latest
     container_name: claude-skills-dev
     volumes:
