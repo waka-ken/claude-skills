@@ -1,3 +1,7 @@
+# プロジェクト名を固定する。Dev Container（Reopen in Container）と docker compose の両方から
+# 同じコンテナ・同じボリュームを使い、Claude の認証や拡張を共有するため
+name: claude-skills
+
 services:
   claude-dev:
     build:
@@ -8,6 +12,11 @@ services:
     volumes:
       - .:/workspace
       - claude-config:/home/node/.claude
+      # gh auth login の結果を再ビルド後も残す
+      - gh-config:/home/node/.config/gh
+      # エディタ拡張（Claude Code 拡張など）を再ビルド後も残し、毎回のインストールを不要にする
+      - vscode-extensions:/home/node/.vscode-server/extensions
+      - cursor-extensions:/home/node/.cursor-server/extensions
       - ${HOME}/.ssh:/home/node/.ssh
       - ${HOME}/.gitconfig:/home/node/.gitconfig:ro
     environment:
@@ -20,3 +29,6 @@ services:
 
 volumes:
   claude-config:
+  gh-config:
+  vscode-extensions:
+  cursor-extensions:

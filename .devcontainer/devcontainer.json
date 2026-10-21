@@ -1,27 +1,20 @@
 {
   "name": "Claude Code Development",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": ".."
-  },
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "claude-dev",
   "remoteUser": "node",
   "workspaceFolder": "/workspace",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
-  "mounts": [
-    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=${localEnv:HOME}/.ssh,target=/home/node/.ssh,type=bind",
-    "source=${localEnv:HOME}/.gitconfig,target=/home/node/.gitconfig,type=bind,readonly"
-  ],
-  "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
-    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/share/npm-global/bin"
+  "remoteEnv": {
+    "PATH": "${containerEnv:PATH}:/usr/local/share/npm-global/bin"
   },
   "customizations": {
     "vscode": {
       "extensions": [
-        "anthropic.claude-code"
+        "anthropic.claude-code",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
       ]
     }
   },
-  "postCreateCommand": "git config --global --add safe.directory /workspace 2>/dev/null || true; chmod 700 /home/node/.ssh 2>/dev/null || true; chmod 600 /home/node/.ssh/id_* /home/node/.ssh/*_rsa /home/node/.ssh/*_ed25519 /home/node/.ssh/config 2>/dev/null || true"
+  "postCreateCommand": "npm ci; chmod 700 /home/node/.ssh 2>/dev/null || true; chmod 600 /home/node/.ssh/id_* /home/node/.ssh/*_rsa /home/node/.ssh/*_ed25519 /home/node/.ssh/config 2>/dev/null || true"
 }

@@ -7,7 +7,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \
-    gh \
     jq \
     less \
     nano \
@@ -19,6 +18,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# GitHub CLI（Debian 標準の gh は古い版で止まっているため、公式 apt リポジトリから入れる）
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && gh --version
+
 # npm グローバルパッケージ用ディレクトリ
 RUN mkdir -p /usr/local/share/npm-global \
     && chown -R node:node /usr/local/share
@@ -28,9 +37,15 @@ ENV PATH="${PATH}:/usr/local/share/npm-global/bin"
 ENV DEVCONTAINER=true
 ENV SHELL=/bin/bash
 
-# 作業ディレクトリと Claude 設定ディレクトリ
-RUN mkdir -p /workspace /home/node/.claude \
-    && chown -R node:node /workspace /home/node/.claude
+# 作業ディレクトリと、ボリュームで永続化するディレクトリ
+# 空の named volume は初回マウント時にイメージ側の所有者を引き継ぐため、node 所有で先に作っておく
+# （作らないと root 所有になり、拡張のインストールや gh auth login が権限エラーになる）
+RUN mkdir -p /workspace \
+        /home/node/.claude \
+        /home/node/.config/gh \
+        /home/node/.vscode-server/extensions \
+        /home/node/.cursor-server/extensions \
+    && chown -R node:node /workspace /home/node
 
 WORKDIR /workspace
 
