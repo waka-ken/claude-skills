@@ -22,6 +22,16 @@ services:
     environment:
       CLAUDE_CONFIG_DIR: /home/node/.claude
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # VS Code / Cursor 拡張機能を自動インストールする。
+    # `docker compose up` → Attach to Running Container では devcontainer.json の拡張一覧が使われないため、
+    # エディタが繋がって code-server CLI が注入されるのを待ってから、コンテナ側でバックグラウンド実行する。
+    # 対象は .devcontainer/devcontainer.json の customizations.vscode.extensions。
+    command:
+      - sh
+      - -c
+      - |
+        sh /workspace/.devcontainer/install-extensions.sh &
+        exec sleep infinity
     stdin_open: true
     tty: true
     working_dir: /workspace

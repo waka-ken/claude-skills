@@ -40,6 +40,11 @@ claude --version
 claude
 ```
 
+`docker compose up -d` のあとに VS Code / Cursor の **Attach to Running Container** で繋ぐ場合も、
+拡張（`devcontainer.json` の `customizations.vscode.extensions`）は自動で入ります。
+コンテナ起動時に `.devcontainer/install-extensions.sh` がエディタの接続を最大 10 分待ち、未インストールのものだけ入れます。
+10 分以上経ってから繋いだ場合は、コンテナ内で `sh .devcontainer/install-extensions.sh` を実行します。
+
 ## マウント一覧
 
 | ホスト | コンテナ | 用途 |
@@ -127,6 +132,7 @@ docker compose down
 .devcontainer/
   Dockerfile          # Claude Code + 開発ツール
   devcontainer.json   # Cursor/VS Code 用設定
+  install-extensions.sh  # 拡張の自動インストール（Attach でも動く）
 docker-compose.yml    # スタンドアロン実行用
 scripts/dev-shell.sh  # コンテナ起動ヘルパー
 scripts/gas-deploy.sh # *.gs を Apps Script へ反映（GitHub Actions から実行）
