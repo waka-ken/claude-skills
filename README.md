@@ -22,6 +22,8 @@ claude
 ```
 
 ブラウザ認証が完了すれば、以降はコンテナ再ビルド後も `~/.claude` ボリュームに認証情報が保持されます。
+Claude Code 拡張・ESLint・Prettier は初回に自動でインストールされ、ボリュームに保持されるため再ビルド後に入れ直す必要はありません。
+方法 A と方法 B は同じコンテナ・同じボリュームを使うため、どちらで認証しても共有されます。
 
 ### 方法 B: docker compose でシェルに入る
 
@@ -44,10 +46,12 @@ claude
 |--------|----------|------|
 | ワークスペース | `/workspace` | リポジトリ本体 |
 | Docker volume `claude-config` | `/home/node/.claude` | Claude Code 認証・設定の永続化 |
+| Docker volume `gh-config` | `/home/node/.config/gh` | `gh auth login` の永続化 |
+| Docker volume `vscode-extensions` / `cursor-extensions` | `/home/node/.vscode-server/extensions` / `/home/node/.cursor-server/extensions` | エディタ拡張の永続化 |
 | `${HOME}/.ssh` | `/home/node/.ssh` | GitHub SSH 鍵（rw） |
 | `${HOME}/.gitconfig` | `/home/node/.gitconfig` | git 作者情報（ro） |
 
-Dev Container では `${localEnv:HOME}`、compose では `${HOME}` を参照します（WSL / Linux のホームを想定）。
+Dev Container も `docker-compose.yml` を使うため、`${HOME}` を参照します（WSL / Linux のホームを想定）。
 
 ## 認証
 
@@ -58,7 +62,7 @@ Dev Container では `${localEnv:HOME}`、compose では `${HOME}` を参照し�
 | OAuth（推奨） | コンテナ内で `claude` を実行し、ブラウザでログイン |
 | API キー | `.env` に `ANTHROPIC_API_KEY` を設定 |
 
-認証情報は Docker ボリューム `claude-config`（または devcontainer の `claude-code-config-*`）に永続化されます。
+認証情報は Docker ボリューム `claude-config` に永続化されます。
 
 ### GitHub（git push / gh）
 
@@ -77,6 +81,16 @@ ssh -T git@github.com
 ```
 
 成功例: `Hi <user>! You've successfully authenticated...`
+
+**gh CLI（PR 作成・API 操作用、初回のみ）**
+
+git の push / pull は SSH 鍵で動きますが、`gh`（PR 作成など）は別にログインが必要です。
+ログイン情報は Docker ボリューム `gh-config` に保持されるため、再ビルド後もやり直しは不要です。
+
+```bash
+gh auth login -h github.com -p ssh -w   # 表示されたコードをブラウザで入力。SSH 鍵のアップロードは Skip
+gh auth status
+```
 
 **フォールバック（SSH が使えない場合）**
 
@@ -105,6 +119,7 @@ docker compose down
 ```
 
 設定変更（マウント追加など）後は **Rebuild Container** または `docker compose up -d --build` が必要です。
+ボリュームごと初期化したい場合（認証・拡張もリセットされます）は `docker compose down -v` を使います。
 
 ## ディレクトリ構成
 
