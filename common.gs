@@ -1,6 +1,7 @@
 /**
  * 共通定数・ヘルパー関数
- * notion_task_extractor.gs / morning_tasks.gs / github_dispatch.gs / email_alert_ingestor.gs から共有
+ * notion_task_extractor.gs / morning_tasks.gs / github_dispatch.gs /
+ * email_alert_ingestor.gs / gap_monitor.gs から共有
  *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  * 【スクリプトプロパティ（全スクリプト共通）】
@@ -10,6 +11,7 @@
  *
  *   GEMINI_API_KEY : Gemini APIキー（無料枠あり）
  *                    取得: https://aistudio.google.com/app/apikey
+ *                    email_alert_ingestor.gs / gap_monitor.gs で使用
  *
  *   SLACK_TOKEN    : Slack Bot Token（xoxb-... で始まるもの）
  *                    取得: https://api.slack.com/apps
@@ -17,6 +19,7 @@
  *
  *   GITHUB_PAT     : GitHub PAT（repo + workflow 権限）
  *                    AIパイプライン Repository Dispatch 用（github_dispatch.gs）
+ *                    ギャップ監視の Issue/PR/docs 読み取りにも使用（gap_monitor.gs）
  *
  *   WEBHOOK_SECRET : Notion Automation → GAS doPost の共有シークレット
  *
@@ -75,6 +78,44 @@ function postSlackDm_(token, message, opt) {
     channel: raw.channel || SLACK_USER_DM,
     error: raw.error || null,
     raw: raw,
+  };
+}
+
+/**
+ * Slack 送信経路の切り分けテスト（DM / チャンネルを明示して各1通）
+ * GAS エディタで testSlackNotifyRoutes() を実行する
+ */
+function testSlackNotifyRoutes() {
+  const token = PropertiesService.getScriptProperties().getProperty('SLACK_TOKEN');
+  if (!token) throw new Error('SLACK_TOKEN が未設定です');
+
+  const stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+  const dmText = `[TEST] GAS→DM only (${stamp})\n経路: postSlackDm_ / channel=${SLACK_USER_DM}`;
+  const chText =
+    `[TEST] GAS→CHANNEL (${stamp})\n` +
+    `経路: chat.postMessage / channel=${SLACK_CHANNEL}\n` +
+    'このメッセージが Jackson Office に出れば、GAS Bot がチャンネル投稿可能です。';
+
+  const dmRes = postSlackDm_(token, dmText);
+  Logger.log('DM: ' + JSON.stringify({ ok: dmRes.ok, error: dmRes.error, channel: dmRes.channel }));
+
+  const chPayload = { channel: SLACK_CHANNEL, text: chText };
+  const chHttp = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    contentType: 'application/json',
+    payload: JSON.stringify(chPayload),
+    muteHttpExceptions: true,
+  });
+  const chRaw = JSON.parse(chHttp.getContentText() || '{}');
+  Logger.log(
+    'CHANNEL: ' +
+      JSON.stringify({ ok: !!chRaw.ok, error: chRaw.error || null, channel: chRaw.channel })
+  );
+
+  return {
+    dm: { ok: dmRes.ok, error: dmRes.error },
+    channel: { ok: !!chRaw.ok, error: chRaw.error || null },
   };
 }
 

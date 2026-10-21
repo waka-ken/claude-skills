@@ -5,12 +5,12 @@
  * ※ 共通定数・ヘルパーは common.gs を参照
  *
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- * 【処理フロー】（毎日 21:00 JST に実行）
+ * 【処理フロー】（30分ごとに実行）
  *
  *   ① 未着手議事録からTODOチェックボックスを抽出
  *      → Geminiでタスク名を整形 → Notionにタスク登録
  *      → 議事録ページのタグを「完了」に更新
- *   ※ Slack への日次通知は行わない（結果は Logger に出力）
+ *   ※ 未着手が0件なら Notion クエリのみで終了（Slack通知なし）
  *
  * 【初回セットアップ手順】
  *   1. script.google.com で common.gs / notion_task_extractor.gs /
@@ -22,14 +22,25 @@
  * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  */
 
+/** 議事録抽出ポーリング間隔（分）。GAS everyMinutes は 1/5/10/15/30 のみ */
+const MINUTES_POLL_EVERY_MINUTES = 30;
+
 // ─────────────────────────────────────────────
 // 定数
 // ─────────────────────────────────────────────
 const MINUTES_DB_ID = '380db617-4b67-802f-9f63-fe51ecbe05d0'; // [DB] 議事録・ドキュメント管理
 const ALL_TASKS_DB_ID = '380db617-4b67-80a9-bdc4-cad9411d207c'; // [DB] オールタスク管理
 
+// 旧日次Slack通知で使っていたハンドラ名（トリガー残骸掃除用）
+const MINUTES_LEGACY_TRIGGER_HANDLERS = [
+  'runDailyTaskReport',
+  'runExtractor',
+  'runDailyAiOrganizer',
+];
+
 // ─────────────────────────────────────────────
-// メインエントリーポイント（毎日 21:00 JST に実行）
+// メインエントリーポイント（30分ごとに実行）
+// ※ Slack / notifySlack_ は呼ばない（意図的に無効化済み）
 // ─────────────────────────────────────────────
 function runDailyTaskReport() {
   const props = PropertiesService.getScriptProperties();
@@ -38,7 +49,7 @@ function runDailyTaskReport() {
   const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
 
   try {
-    // ① 議事録 → Notionタスク登録（Slack通知なし）
+    // ① 議事録 → Notionタスク登録のみ（Slack通知は絶対にしない）
     const minutesResult = processMinutes_(notionToken, geminiApiKey, today);
     Logger.log(
       `議事録抽出完了（${today}）: ` +
@@ -49,6 +60,7 @@ function runDailyTaskReport() {
       Logger.log(`  • ${m.title} → ${m.taskCount}タスク`);
     }
   } catch (e) {
+    // 旧実装はここで Slack 通知していたが、再発防止のため Logger のみ
     Logger.log(`⚠️ 議事録抽出でエラー（${today}）: ${e.message}`);
     throw e;
   }
@@ -257,21 +269,51 @@ function getPageDate_(page) {
 // ─────────────────────────────────────────────
 // タイムトリガー設定（一度だけ手動実行）
 // ─────────────────────────────────────────────
-function setupDailyTrigger() {
-  ScriptApp.getProjectTriggers()
-    .filter(t =>
-      ['runDailyTaskReport', 'runExtractor', 'runDailyAiOrganizer'].includes(t.getHandlerFunction())
-    )
-    .forEach(t => ScriptApp.deleteTrigger(t));
+function clearMinutesLegacyTriggers_() {
+  const handlers = new Set(MINUTES_LEGACY_TRIGGER_HANDLERS);
+  let removed = 0;
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (handlers.has(t.getHandlerFunction())) {
+      ScriptApp.deleteTrigger(t);
+      removed += 1;
+    }
+  });
+  return removed;
+}
 
+function createMinutesPollTrigger_() {
   ScriptApp.newTrigger('runDailyTaskReport')
     .timeBased()
-    .atHour(21)
-    .everyDays(1)
-    .inTimezone('Asia/Tokyo')
+    .everyMinutes(MINUTES_POLL_EVERY_MINUTES)
     .create();
+}
 
-  Logger.log('✅ 日次タスクレポートトリガーを設定しました（毎日 21:00 JST）');
+/**
+ * 議事録まわりの旧Slack通知トリガー残骸を削除し、30分ポーリングを再登録する
+ * 抽出ジョブ自体も止めたい場合は disableMinutesDailyTrigger() を使う
+ */
+function cleanupMinutesNotifyTriggers() {
+  const before = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
+  const removed = clearMinutesLegacyTriggers_();
+  createMinutesPollTrigger_();
+  Logger.log(
+    `✅ 議事録トリガー掃除完了: 削除 ${removed}件 / 再登録 runDailyTaskReport（${MINUTES_POLL_EVERY_MINUTES}分ごと・Slackなし）`
+  );
+  Logger.log('掃除前ハンドラ: ' + (before.length ? before.join(', ') : '(なし)'));
+}
+
+/** 議事録ポーリング自体を止める（通知も処理も止まる） */
+function disableMinutesDailyTrigger() {
+  const removed = clearMinutesLegacyTriggers_();
+  Logger.log(`✅ 議事録抽出トリガーを停止しました（削除 ${removed}件）`);
+}
+
+function setupDailyTrigger() {
+  clearMinutesLegacyTriggers_();
+  createMinutesPollTrigger_();
+  Logger.log(
+    `✅ 議事録抽出トリガーを設定しました（${MINUTES_POLL_EVERY_MINUTES}分ごと / Slack通知なし）`
+  );
 }
 
 // ─────────────────────────────────────────────
