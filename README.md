@@ -114,6 +114,8 @@ docker compose down
   devcontainer.json   # Cursor/VS Code 用設定
 docker-compose.yml    # スタンドアロン実行用
 scripts/dev-shell.sh  # コンテナ起動ヘルパー
+scripts/gas-deploy.sh # *.gs を Apps Script へ反映（GitHub Actions から実行）
+.github/workflows/gas-deploy.yml  # main マージで GAS 自動反映
 github_dispatch.gs    # Notion → GitHub Dispatch 中継（GAS）
 email_alert_ingestor.gs  # 必須対応メール監視 → Notion（GAS）
 docs/notion-claude-pipeline-spec.md  # AIパイプライン仕様
@@ -127,5 +129,6 @@ docs/mandatory-email-setup.md        # メール監視セットアップ
 - [仕様](docs/notion-claude-pipeline-spec.md)
 - [Notion Automation](docs/notion-automation-setup.md)
 - [GitHub Actions 導入](docs/github-actions-setup.md)
+- [GAS 自動反映（main マージ → Apps Script）](docs/gas-auto-deploy.md)
 - [必須対応メール → Notion 提案](docs/mandatory-email-to-notion-proposal.md)
 - [必須対応メール監視セットアップ](docs/mandatory-email-setup.md)
