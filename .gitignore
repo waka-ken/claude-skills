@@ -8,3 +8,7 @@ eslint.gas-globals.json
 .claude/settings.json
 .claude/settings.local.json
 .claude/import-tasks-state.json
+
+# GAS 自動反映（scripts/gas-deploy.sh）の作業ディレクトリと clasp 認証情報
+.gas-deploy/
+.clasprc.json

@@ -7,7 +7,7 @@ Notion の **オートメーションは有料プラン向け**のため、無�
 
 ### 1. 最新の `github_dispatch.gs` を GAS に反映
 
-リポジトリの [`github_dispatch.gs`](../github_dispatch.gs) を開き直し、全文を GAS に貼り直す。
+main にマージされれば自動で反映される（[GAS 自動反映](gas-auto-deploy.md)）。自動反映を設定していない場合は、リポジトリの [`github_dispatch.gs`](../github_dispatch.gs) の全文を GAS に貼り直す。
 
 ### 2. スクリプトプロパティ（ポーリングに必要なもの）
 
