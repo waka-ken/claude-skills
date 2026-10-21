@@ -14,6 +14,13 @@
  *      （WEBHOOK_SECRET は doPost 利用時のみ必須）
  *   3. setupAiDispatchPollTrigger() を一度だけ手動実行
  *   4. Notion で AIステータスを「AIに依頼」にする → 最大数分で Dispatch
+ *      （タイトルに（設計）/（実装）は不要。Actions が内容判定する）
+ *
+ * 【契約（Actions 連携）】
+ *   - event_type: notion-ai-task
+ *   - task_kind は送らない（Actions が AI 判定）。明示 override 時のみ任意
+ *   - Dispatch ID は初回のみ新規発行、再依頼時は再利用（WIP resume）
+ *   - 同一 Dispatch で設計→実装を連続実行し得る（ターン予算はジョブ分離）
  *
  * 【有料プラン向け: Web App / doPost】
  *   デプロイして Notion Automation から POST してもよい（任意）。
@@ -24,6 +31,14 @@
 const DISPATCH_EVENT_TYPE = 'notion-ai-task';
 const DISPATCH_TASKS_DB_ID = '380db617-4b67-80a9-bdc4-cad9411d207c';
 const DISPATCH_PROJECTS_DB_ID = '380db617-4b67-80ab-bc76-c2287da389ee';
+
+// repository_dispatch を受けるワークフローの配置パス（対象リポジトリ側）。
+// GitHub は「このファイルがデフォルトブランチに在る」ときだけ dispatch を発火する。
+const DISPATCH_WORKFLOW_PATH = '.github/workflows/notion-ai-task.yml';
+
+// 1 実行内での重複チェックを避けるためのキャッシュ（repoFullName -> true）。
+// GAS は実行ごとにトップレベルを再評価するため poll 1 回の寿命で十分。
+const _dispatchReadyRepoCache = {};
 
 /**
  * 無料プラン向け: 「AIに依頼」タスクを拾って Dispatch
@@ -402,7 +417,7 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
 
   const title = getTitleFromPage_(page);
   const aiStatus = page.properties?.['AIステータス']?.select?.name || '';
-  const existingDispatchId = richTextPlain_(page.properties?.['Dispatch ID']);
+  const existingDispatchId = richTextPlain_(page.properties?.['Dispatch ID']).trim();
 
   // 冪等: すでに設計以降に進んでいる／同一 Dispatch 済みならスキップ
   if (['AI設計中', 'AI実装中', 'PR作成済'].includes(aiStatus) && existingDispatchId) {
@@ -424,6 +439,11 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     );
   }
 
+  // repository_dispatch は対象リポジトリのデフォルトブランチにワークフローが
+  // 無いと、HTTP 204 を返しつつ何も起動しない（GAS 側は成功と誤認する）。
+  // Notion を「AI設計中」に楽観更新する前に検証し、原因を明示して早期失敗させる。
+  assertDispatchWorkflowReady_(githubPat, repoFullName);
+
   const bodyParsed = fetchAndParseTaskBody_(notionToken, pageId);
   const fingerprint = buildAiTaskFingerprint_(title, bodyParsed.raw, repoFullName);
   fingerprint.pageId = pageId;
@@ -441,8 +461,30 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     };
   }
 
-  const dispatchId = Utilities.getUuid();
+  // 初回のみ新規 UUID。AI失敗→再依頼は既存 Dispatch ID を再利用（WIP resume）
+  const dispatchId = existingDispatchId || Utilities.getUuid();
 
+  // dispatch 直前に楽観更新（再依頼時は AI最終エラー をクリア）
+  notionPatch_(notionToken, `https://api.notion.com/v1/pages/${pageId}`, {
+    properties: {
+      AIステータス: { select: { name: 'AI設計中' } },
+      'Dispatch ID': { rich_text: [{ type: 'text', text: { content: dispatchId } }] },
+      AI最終エラー: { rich_text: [] },
+      タグ: { status: { name: '進行中' } },
+    },
+  });
+
+  notionCreateComment_(
+    notionToken,
+    pageId,
+    `🚀 AI依頼を受け付けました\n` +
+      `リポジトリ: ${repoFullName}\n` +
+      `Dispatch ID: ${dispatchId}\n` +
+      `ステータス: AI設計中\n` +
+      `次の工程: Actions が内容判定 → 必要なら設計 → 必要なら実装 → Draft PR`
+  );
+
+  // task_kind は送らない（Actions が AI 判定）。明示 override が必要ならここに追加する。
   const clientPayload = {
     notion_page_id: pageId,
     title: title,
@@ -463,25 +505,6 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
   if (ghRes.code < 200 || ghRes.code >= 300) {
     throw new Error(`GitHub Dispatch failed (${ghRes.code}) for ${repoFullName}: ${ghRes.body}`);
   }
-
-  notionPatch_(notionToken, `https://api.notion.com/v1/pages/${pageId}`, {
-    properties: {
-      AIステータス: { select: { name: 'AI設計中' } },
-      'Dispatch ID': { rich_text: [{ type: 'text', text: { content: dispatchId } }] },
-      AI最終エラー: { rich_text: [] },
-      タグ: { status: { name: '進行中' } },
-    },
-  });
-
-  notionCreateComment_(
-    notionToken,
-    pageId,
-    `🚀 AI依頼を受け付けました\n` +
-      `リポジトリ: ${repoFullName}\n` +
-      `Dispatch ID: ${dispatchId}\n` +
-      `ステータス: AI設計中\n` +
-      `次の工程: 設計（.ai_todo.md）→ 実装 → Draft PR 作成`
-  );
 
   return {
     skipped: false,
@@ -784,6 +807,75 @@ function getTitleFromPage_(page) {
 // ─────────────────────────────────────────────
 // GitHub
 // ─────────────────────────────────────────────
+/** GitHub API GET。例外にせず {code, body} を返す（404 と権限エラーを呼び出し側で切り分ける） */
+function githubApiGet_(pat, apiPath) {
+  const res = UrlFetchApp.fetch('https://api.github.com' + apiPath, {
+    method: 'get',
+    headers: {
+      Authorization: `Bearer ${pat}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'notion-gas-ai-dispatch',
+    },
+    muteHttpExceptions: true,
+  });
+  return { code: res.getResponseCode(), body: res.getContentText() || '' };
+}
+
+/**
+ * repository_dispatch を打つ前提条件を検証する。
+ * - リポジトリが見える（PAT のスコープ／対象に入っている）
+ * - デフォルトブランチに DISPATCH_WORKFLOW_PATH のワークフローが存在する
+ *   （存在しないと GitHub は 204 を返すだけで Actions が起動しない）
+ * 満たさない場合は原因が分かる例外を投げ、呼び出し側で「AI失敗」に落とす。
+ */
+function assertDispatchWorkflowReady_(pat, repoFullName) {
+  if (_dispatchReadyRepoCache[repoFullName]) return;
+
+  const repoRes = githubApiGet_(pat, `/repos/${repoFullName}`);
+  if (repoRes.code === 404) {
+    throw new Error(
+      `GitHub リポジトリ ${repoFullName} が見つからない、または GITHUB_PAT に参照権限がありません。` +
+        'PAT のスコープ（repo / workflow）と、Fine-grained PAT の場合は対象リポジトリの許可を確認してください。'
+    );
+  }
+  if (repoRes.code < 200 || repoRes.code >= 300) {
+    throw new Error(
+      `GitHub リポジトリ確認に失敗 (${repoRes.code}) ${repoFullName}: ${repoRes.body.slice(0, 200)}`
+    );
+  }
+
+  let defaultBranch = '';
+  try {
+    defaultBranch = JSON.parse(repoRes.body).default_branch || '';
+  } catch (_) {
+    /* fallthrough: defaultBranch 空で下の分岐に入る */
+  }
+  if (!defaultBranch) {
+    throw new Error(`GitHub リポジトリ ${repoFullName} の default_branch を取得できませんでした`);
+  }
+
+  const wfRes = githubApiGet_(
+    pat,
+    `/repos/${repoFullName}/contents/${DISPATCH_WORKFLOW_PATH}?ref=${encodeURIComponent(defaultBranch)}`
+  );
+  if (wfRes.code === 404) {
+    throw new Error(
+      `${repoFullName} のデフォルトブランチ "${defaultBranch}" に ${DISPATCH_WORKFLOW_PATH} がありません。` +
+        'repository_dispatch はワークフローがデフォルトブランチに無いと（HTTP 204 でも）Actions を起動しません。' +
+        `対象リポジトリの "${defaultBranch}" にワークフローをマージしてから「AIに依頼」に戻してください。`
+    );
+  }
+  if (wfRes.code < 200 || wfRes.code >= 300) {
+    throw new Error(
+      `ワークフロー存在確認に失敗 (${wfRes.code}) ${repoFullName}@${defaultBranch}:${DISPATCH_WORKFLOW_PATH}: ` +
+        wfRes.body.slice(0, 200)
+    );
+  }
+
+  _dispatchReadyRepoCache[repoFullName] = true;
+}
+
 function githubRepositoryDispatch_(pat, repoFullName, eventType, clientPayload) {
   const url = `https://api.github.com/repos/${repoFullName}/dispatches`;
   const res = UrlFetchApp.fetch(url, {
