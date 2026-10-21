@@ -16,5 +16,6 @@
       ]
     }
   },
+  "postStartCommand": "sh .devcontainer/install-extensions.sh",
   "postCreateCommand": "npm ci; chmod 700 /home/node/.ssh 2>/dev/null || true; chmod 600 /home/node/.ssh/id_* /home/node/.ssh/*_rsa /home/node/.ssh/*_ed25519 /home/node/.ssh/config 2>/dev/null || true"
 }
