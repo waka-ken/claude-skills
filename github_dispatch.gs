@@ -24,6 +24,8 @@
 const DISPATCH_EVENT_TYPE = 'notion-ai-task';
 const DISPATCH_TASKS_DB_ID = '380db617-4b67-80a9-bdc4-cad9411d207c';
 const DISPATCH_PROJECTS_DB_ID = '380db617-4b67-80ab-bc76-c2287da389ee';
+/** Dispatch してよい唯一の AIステータス */
+const AI_STATUS_REQUESTED = 'AIに依頼';
 
 /**
  * 無料プラン向け: 「AIに依頼」タスクを拾って Dispatch
@@ -328,7 +330,7 @@ function queryAiRequestPages_(token) {
     const payload = {
       filter: {
         property: 'AIステータス',
-        select: { equals: 'AIに依頼' },
+        select: { equals: AI_STATUS_REQUESTED },
       },
       page_size: 50,
     };
@@ -413,6 +415,13 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
       dispatch_id: existingDispatchId,
       ai_status: aiStatus,
     };
+  }
+
+  // 「AIに依頼」以外は Dispatch しない（doPost・手動実行など、ポーリング以外の入口も同じ）。
+  // 例: 「人が対応」は人が進めるタスクで、AI は関与しない（2026-10-21）。
+  // throw すると呼び出し側が AI失敗 に書き換えるため、状態を変えずにスキップとして返す。
+  if (aiStatus !== AI_STATUS_REQUESTED) {
+    return { skipped: true, reason: 'not_requested', title, ai_status: aiStatus };
   }
 
   const projectIds = (page.properties?.['プロジェクト']?.relation || []).map(r => r.id);
