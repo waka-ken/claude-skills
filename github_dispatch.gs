@@ -439,6 +439,12 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     return { skipped: true, reason: 'not_requested', title, ai_status: aiStatus };
   }
 
+  // 運用・是正タスク（API-OP-1）はリポへの dispatch の送り先が無い。プロジェクトのリポへのフォールバックより前に止め、
+  // 呼び出し側の AI失敗（AI最終エラー）に落とす。判定は jackson-office-api の projectflow.TaskKind と同じ。
+  if (isOpsTask_(page)) {
+    throw new Error('運用タスクは運用レーン未対応（API-OP-2）');
+  }
+
   const projectIds = (page.properties?.['プロジェクト']?.relation || []).map(r => r.id);
   // タスク単位のリポ指定を優先（同一プロジェクトでも PR 先が分かれるため）
   const repoFullName = resolveGithubRepoFromTask_(page, notionToken, projectIds);
@@ -734,6 +740,23 @@ function collectProjectRepos_(token) {
   } while (cursor);
 
   return Object.keys(set).sort();
+}
+
+/**
+ * 運用・是正タスクか（API-OP-1）。`種別` が 運用 なら true、開発 なら false。
+ * 空なら、タスクの GitHubリポジトリ が空で、表タスク（計画書あり）でも小タスク（親タスクあり）でもなければ true。
+ */
+function isOpsTask_(page) {
+  const props = page.properties || {};
+  const kind = selectPropPlain_(props['種別']).trim();
+  if (kind === '運用') return true;
+  if (kind === '開発') return false;
+  const hasRelation = name => (props[name]?.relation || []).length > 0;
+  return (
+    !selectPropPlain_(props['GitHubリポジトリ']).trim() &&
+    !hasRelation('計画書') &&
+    !hasRelation('親タスク')
+  );
 }
 
 function selectPropPlain_(prop) {
