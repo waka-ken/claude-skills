@@ -96,9 +96,11 @@ function pollEmailAlerts() {
 
     // 毎回 Notion から現行プロジェクトを取得（ハードコードしない）
     const projects = fetchActiveProjects_(notionToken);
+    // 未完了の運用タスクの Fingerprint（同じ件の起票を重ねないため・API-OP-0）
+    const openOps = fetchOpenOpsTasks_(notionToken);
     const denylist = loadDenylist_();
     const processedIds = loadProcessedIds_();
-    const summary = { created: 0, skipped: 0, ignored: 0, errors: 0 };
+    const summary = { created: 0, merged: 0, skipped: 0, ignored: 0, errors: 0 };
 
     for (const thread of threads) {
       const messages = thread.getMessages();
@@ -111,6 +113,7 @@ function pollEmailAlerts() {
           denylist,
           processedIds,
           projects,
+          openOps,
           notionToken,
           geminiApiKey,
           slackToken,
@@ -151,6 +154,7 @@ function processOneMessage_({
   denylist,
   processedIds,
   projects,
+  openOps,
   notionToken,
   geminiApiKey,
   slackToken,
@@ -191,6 +195,9 @@ function processOneMessage_({
     receivedIso,
     bodyText,
     projects,
+    knownFingerprints: (openOps || []).map(function (o) {
+      return o.fingerprint;
+    }),
   });
 
   processedIds.push(messageId);
@@ -202,6 +209,24 @@ function processOneMessage_({
   }
 
   const projectAssign = resolveProjectFromJudgment_(projects, judgment);
+
+  // 同じ件（送信元のサービス＋要件）の未完了タスクがあれば、新しく起票せずにコメントを足す（プロジェクトをまたいで探す）
+  const fingerprint = buildEmailFingerprint_(judgment);
+  const existing = fingerprint
+    ? (openOps || []).find(function (o) {
+        return o.fingerprint === fingerprint;
+      })
+    : null;
+  if (existing) {
+    notionCreateComment_(
+      notionToken,
+      existing.id,
+      `📨 同じ件のメールを受信しました（新しいタスクは作っていません）\n受信: ${receivedDisplay}（JST）\n件名: ${subject}\nFrom: ${from}`
+    );
+    markThreadDone_(thread, doneLabel);
+    return 'merged';
+  }
+
   const page = createEmailTask_(notionToken, {
     judgment,
     from,
@@ -210,7 +235,9 @@ function processOneMessage_({
     messageId,
     monitorAddr,
     projectAssign,
+    fingerprint,
   });
+  if (fingerprint && page?.id) (openOps || []).push({ id: page.id, fingerprint: fingerprint });
 
   const pageUrl = page?.url || '(URL不明)';
   const urgency =
@@ -633,7 +660,7 @@ function formatProjectAssignLabel_(projectAssign) {
 // ─────────────────────────────────────────────
 function classifyEmailWithGemini_(
   apiKey,
-  { monitorAddr, from, subject, receivedIso, bodyText, projects }
+  { monitorAddr, from, subject, receivedIso, bodyText, projects, knownFingerprints }
 ) {
   const projectLines =
     (projects || []).length > 0
@@ -657,6 +684,9 @@ function classifyEmailWithGemini_(
     '【プロジェクト候補】\n' +
     projectLines +
     '\n\n' +
+    '【既存キー（未完了の運用タスクの service:topic）】\n' +
+    ((knownFingerprints || []).join('\n') || '(なし)') +
+    '\n\n' +
     '監視メール: ' +
     monitorAddr +
     '\n' +
@@ -676,6 +706,7 @@ function classifyEmailWithGemini_(
     '{\n' +
     '  "category": "action_required" | "review" | "fyi" | "ignore" | "uncertain",\n' +
     '  "service": "文字列（未知なら Other）",\n' +
+    '  "topic": "要件を表す短い英語のキー（小文字・ハイフン区切り。例 unauthorized-login）。既存キーと同じ件なら、その : より後ろをそのまま使う",\n' +
     '  "project_name": "候補の正式名そのもの または null",\n' +
     '  "project_confidence": 0.0,\n' +
     '  "urgency": "urgent" | "normal" | "low",\n' +
@@ -760,6 +791,7 @@ function normalizeJudgment_(j, subject) {
   return {
     category: finalCategory,
     service: String(j.service || 'Other').slice(0, 40),
+    topic: emailKey_(j.topic),
     project_name: projectName,
     project_confidence: projectConfidence,
     urgency: urgency,
@@ -795,13 +827,18 @@ function fallbackJudgment_(subject) {
 // ─────────────────────────────────────────────
 function createEmailTask_(
   token,
-  { judgment, from, subject, receivedIso, messageId, monitorAddr, projectAssign }
+  { judgment, from, subject, receivedIso, messageId, monitorAddr, projectAssign, fingerprint }
 ) {
   const title = judgment.title || subject || 'メール要確認';
   const properties = {
     プロジェクト名: { title: [{ text: { content: title.slice(0, 100) } }] },
     タグ: { status: { name: '未着手' } },
+    種別: { select: { name: '運用' } },
+    優先度: { select: { name: EMAIL_URGENCY_PRIORITY[judgment.urgency] || '低' } },
   };
+  if (fingerprint) {
+    properties['Fingerprint'] = { rich_text: [{ type: 'text', text: { content: fingerprint } }] };
+  }
 
   const project = projectAssign?.project;
   if (project?.id) {
@@ -860,6 +897,63 @@ function createEmailTask_(
     throw new Error('Notion ページ作成失敗: ' + (res.message || JSON.stringify(res)));
   }
   return res;
+}
+
+/** 緊急度 → 優先度（API-OP-0）。それ以外は 低 */
+const EMAIL_URGENCY_PRIORITY = { urgent: '高', normal: '中' };
+
+/** 小文字・英数字とハイフンだけのキーにする */
+function emailKey_(v) {
+  return String(v || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+/**
+ * 同じ件を見分ける値（送信元のサービス＋要件）。Message-ID は使わない（再送・別アカウント宛てでも同じ値になるように）。
+ * 要件（topic）が取れなければ空（重複の確認をしない）。
+ */
+function buildEmailFingerprint_(judgment) {
+  const topic = emailKey_(judgment.topic);
+  if (!topic) return '';
+  return (emailKey_(judgment.service) || 'other') + ':' + topic;
+}
+
+/** [DB]オールタスク管理 の未完了で Fingerprint があるタスク（全プロジェクト） */
+function fetchOpenOpsTasks_(token) {
+  const url = `https://api.notion.com/v1/databases/${EMAIL_TASKS_DB_ID}/query`;
+  const out = [];
+  let cursor = undefined;
+  do {
+    const payload = {
+      page_size: 100,
+      filter: {
+        and: [
+          { property: 'Fingerprint', rich_text: { is_not_empty: true } },
+          { property: 'タグ', status: { does_not_equal: '完了' } },
+        ],
+      },
+    };
+    if (cursor) payload.start_cursor = cursor;
+    const res = notionPost_(token, url, payload);
+    if (res.object === 'error') {
+      throw new Error('運用タスク一覧取得失敗: ' + (res.message || JSON.stringify(res)));
+    }
+    (res.results || []).forEach(function (page) {
+      const fp = (page.properties?.['Fingerprint']?.rich_text || [])
+        .map(function (t) {
+          return t.plain_text || '';
+        })
+        .join('')
+        .trim();
+      if (fp) out.push({ id: page.id, fingerprint: fp });
+    });
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return out;
 }
 
 function emailHeading2_(text) {
