@@ -439,10 +439,11 @@ function processAiDispatch_(notionToken, githubPat, pageId, dedupeCtx) {
     return { skipped: true, reason: 'not_requested', title, ai_status: aiStatus };
   }
 
-  // 運用・是正タスク（API-OP-1）はリポへの dispatch の送り先が無い。プロジェクトのリポへのフォールバックより前に止め、
-  // 呼び出し側の AI失敗（AI最終エラー）に落とす。判定は jackson-office-api の projectflow.TaskKind と同じ。
+  // 運用・是正タスク（API-OP-1・API-OP-2）はリポへの dispatch を使わない。jackson-office-api のまとめ役が運用レーン
+  // （ops-task-investigate.yml・読み取りだけの調査）へ送るので、状態を変えずにスキップする（プロジェクトのリポへのフォールバックより前）。
+  // 判定は jackson-office-api の projectflow.TaskKind と同じ。
   if (isOpsTask_(page)) {
-    throw new Error('運用タスクは運用レーン未対応（API-OP-2）');
+    return { skipped: true, reason: 'ops_lane', title, ai_status: aiStatus };
   }
 
   const projectIds = (page.properties?.['プロジェクト']?.relation || []).map(r => r.id);
@@ -743,7 +744,7 @@ function collectProjectRepos_(token) {
 }
 
 /**
- * 運用・是正タスクか（API-OP-1）。`種別` が 運用 なら true、開発 なら false。
+ * 運用・是正タスクか（API-OP-1・API-OP-2）。`種別` が 運用 なら true、開発 なら false。
  * 空なら、タスクの GitHubリポジトリ が空で、表タスク（計画書あり）でも小タスク（親タスクあり）でもなければ true。
  */
 function isOpsTask_(page) {
